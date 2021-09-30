@@ -3,7 +3,7 @@ use dashmap::DashMap;
 /// Thin wrapper around a concurrent hashmap. Wrap it in an Arc to share
 /// between threads or tasks. (No Mutex needed!)
 pub struct Store {
-    pub(in crate::store) db: DashMap<String, String>,
+    pub(in crate::server::store) db: DashMap<String, String>,
 }
 
 impl Store {
@@ -11,10 +11,12 @@ impl Store {
         Self { db: DashMap::new() }
     }
 
-    pub async fn set(&self, key: &str, val: &str) -> Option<()> {
-        self.db.insert(key.to_string(), val.to_string()).map(|_| ())
+    /// Sets `key` to a `value`, returns `true` if `value` changed, `false` if not
+    pub async fn set(&self, key: &str, value: &str) -> bool {
+        self.db.insert(key.to_string(), value.to_string()).is_none()
     }
 
+    /// Retrieves `Some(value)` for a `key`, `None` if not present
     pub async fn get(&self, key: &str) -> Option<String> {
         self.db.get(&key.to_string()).map(|s| s[..].to_string())
     }
