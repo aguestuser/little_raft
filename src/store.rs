@@ -1,82 +1,64 @@
-use std::collections::HashMap;
+use dashmap::DashMap;
 
-use tokio::sync::{mpsc, oneshot};
-use tokio::sync::mpsc::Sender;
-
-use crate::error::Result;
-use crate::store::StoreCommand::{Get, Set};
-
-pub type Db = HashMap<String, String>;
-pub type Responder<T> = oneshot::Sender<Result<T>>;
-
-#[derive(Debug)]
-pub enum StoreCommand {
-    Get {
-        key: String,
-        resp: Responder<Option<String>>,
-    },
-    Set {
-        key: String,
-        val: String,
-        resp: Responder<()>,
-    }
-}
-
+/// Thin wrapper around a concurrent hashmap. Wrap it in an Arc to share
+/// between threads or tasks. (No Mutex needed!)
 pub struct Store {
-    tx: Sender<StoreCommand>,
+    pub(in crate::store) db: DashMap<String, String>,
 }
 
 impl Store {
-
-    async fn run() -> Store {
-        let mut db: Db = HashMap::new();
-        let (tx, mut rx) = mpsc::channel::<StoreCommand>(1);
-
-        // use an actor to enforce thread-safe writes/reads on the store's backing hashmap
-        tokio::spawn(async move {
-            while let Some(cmd) = rx.recv().await {
-                match cmd {
-                    Get { key, resp } => {
-                        let val = db.get(&key).map(|s| s.clone());
-                        let _ = resp.send(Ok(val));
-                    },
-                    Set { key, val, resp } => {
-                        db.insert(key, val);
-                        let _ = resp.send(Ok(()));
-                    }
-                }
-            }
-        });
-
-        Store { tx }
+    pub fn new() -> Store {
+        Self { db: DashMap::new() }
     }
 
-
-    async fn set(&mut self, key: String, val: String) -> Result<()> {
-        let (res_tx, res_rx) = oneshot::channel();
-        self.tx.send(StoreCommand::Set{ key, val, resp: res_tx }).await?;
-        res_rx.await?
+    pub async fn set(&self, key: &str, val: &str) -> Option<()> {
+        self.db.insert(key.to_string(), val.to_string()).map(|_| ())
     }
 
-    async fn get(&mut self, key: String) -> Result<Option<String>> {
-        let (res_tx, res_rx) = oneshot::channel();
-        self.tx.send(StoreCommand::Get{ key, resp: res_tx }).await?;
-        res_rx.await?
+    pub async fn get(&self, key: &str) -> Option<String> {
+        self.db.get(&key.to_string()).map(|s| s[..].to_string())
     }
-
 }
 
 #[cfg(test)]
 mod store_tests {
     use super::*;
 
-    #[tokio::test(flavor ="multi_thread")]
-    async fn set_and_get() {
-        let mut store = Store::run().await;
-        store.set("foo".to_string(), "bar".to_string()).await.unwrap();
-        assert_eq!(
-            store.get("foo".to_string()).await.unwrap(),
-            Some("bar".to_string()),
-        )
+    #[tokio::test(flavor = "multi_thread")]
+    async fn set_a_value() {
+        let store = Store::new();
+        let _ = store.set("foo", "bar").await;
+
+        assert_eq!(&store.db.get("foo").unwrap()[..], "bar");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn get_an_existing_value() {
+        let store = Store::new();
+        let _ = store.set("foo", "bar").await;
+
+        assert_eq!(store.get("foo").await, Some("bar".to_string()));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn get_a_non_existing_value() {
+        let store = Store::new();
+        let _ = store.set("foo", "bar").await;
+
+        assert_eq!(store.get("not here").await, None);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn reset_a_value() {
+        let store = Store::new();
+
+        let _ = store.set("foo", "bar").await;
+        let res1 = store.get("foo").await.unwrap();
+
+        let _ = store.set("foo", "baz").await;
+        let res2 = store.get("foo").await.unwrap();
+
+        assert_eq!(res1, "bar".to_string());
+        assert_eq!(res2, "baz".to_string());
     }
 }
