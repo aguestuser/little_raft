@@ -14,8 +14,8 @@ pub trait AsyncWriter: AsyncWrite + Unpin + Send {}
 impl AsyncWriter for OwnedWriteHalf {}
 
 pub struct Connection {
-    input: BufReader<Box<dyn AsyncReader>>,
-    output: BufWriter<Box<dyn AsyncWriter>>,
+    pub(crate) input: BufReader<Box<dyn AsyncReader>>,
+    pub(crate) output: BufWriter<Box<dyn AsyncWriter>>,
 }
 
 impl Connection {
@@ -25,13 +25,6 @@ impl Connection {
         let input = BufReader::new(Box::new(r) as Box<dyn AsyncReader>);
         let output = BufWriter::new(Box::new(w) as Box<dyn AsyncWriter>);
         Self { input, output }
-    }
-
-    pub fn from_halves(input: Box<dyn AsyncReader>, output: Box<dyn AsyncWriter>) -> Connection {
-        Self {
-            input: BufReader::new(input),
-            output: BufWriter::new(output),
-        }
     }
 
     /// Read a `Request` from the socket
@@ -57,17 +50,18 @@ mod connection_tests {
 
     #[tokio::test]
     async fn reads() {
-        let request = [r#"{"id":42,"type":"Get","key":"foo"}"#, "\n"]
+        let request: Bytes = [r#"{"id":42,"type":"Get","key":"foo"}"#, "\n"]
             .concat()
             .into();
+
+        let (mut connection, input_sender, _) = Connection::with_channel();
+        input_sender.send(request).unwrap();
+
+        let actual_read = connection.read().await.unwrap();
         let expected_read = Request::Get {
             id: 42,
             key: "foo".to_string(),
         };
-
-        let mut connection = Connection::from_fake_input(request);
-        let actual_read = connection.read().await.unwrap();
-
         assert_eq!(actual_read, expected_read);
     }
 
@@ -77,12 +71,12 @@ mod connection_tests {
             id: 42,
             value: Some("foo".to_string()),
         };
-        let expected_write: Vec<u8> = [r#"{"id":42,"value":"foo"}"#, "\n"].concat().into();
 
-        let (mut connection, output) = Connection::with_fake_output();
+        let (mut connection, _, output_receiver) = Connection::with_channel();
         let _ = connection.write(response).await;
 
-        let actual_write: Vec<u8> = output.clone().lock().unwrap().to_vec();
+        let actual_write: Bytes = output_receiver.recv().unwrap();
+        let expected_write: Bytes = [r#"{"id":42,"value":"foo"}"#, "\n"].concat().into();
         assert_eq!(actual_write, expected_write);
     }
 }
