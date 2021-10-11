@@ -1,3 +1,4 @@
+
 # What lies here
 
 This is a playground for toy projects implementing distributed data stores in rust in different ways.
@@ -8,7 +9,7 @@ Currently I am interested in implementing the various examples of approaches to 
 
 # Current state
 
-- [ ] 0: write a server that exposes an HTTPS + JSON interface (with `get` and `set` commands) to a simple key/value store (implemented as a thread-safe hash-map that can store strings or ints as values)
+- [x] 0: write a server that exposes a TCP + JSON interface (with `get` and `set` commands) to a simple key/value store (implemented as a thread-safe hash-map that can store strings as values)
 - [ ] 1: write a client for this server
 - [ ] 2: extend the server into a 6-server cluster (1 load balancer, 1 leader, 1 synchronous follower, 3 async followers)
   - [ ] 2.0: routes all writes to a hard-coded leader
@@ -18,8 +19,8 @@ Currently I am interested in implementing the various examples of approaches to 
 # Up next:
 - handle adding new follower (leader takes snapshot, appends changes to log, follower updates from snapshot + logs)
 - elect new leader if leader fails
-- use some more interesting protocol than HTTP + JSON
-- persisist leader store to disk with write-through semantics
+- use some more interesting protocol than TCP + JSON?
+- persist leader store to disk with write-through semantics
 - use a more realistic "log"
 - ...
 
