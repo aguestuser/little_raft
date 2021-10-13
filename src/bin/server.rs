@@ -1,15 +1,11 @@
 use std::net::SocketAddr;
-use stors::server::config::Config;
+use stors::config::Config;
 use stors::server::server::Server;
 
 #[tokio::main]
 async fn main() {
-    // TODO: parse configs from args!
-    let config = Config {
-        addr: SocketAddr::from(([127, 0, 0, 1], 3000)),
-    };
-    // TODO: return something other than join handle from
-    let _ = Server::run(config).await;
+    let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
+    let _ = Server::new(addr).run().await;
     futures::future::pending().await
 }
 

@@ -1,37 +1,64 @@
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use tokio::net::{TcpListener, TcpStream};
-use tokio::task::JoinHandle;
 
 use crate::frame::request::Request;
 use crate::frame::response::Response;
-use crate::server::config::Config;
 use crate::server::connection::Connection;
 use crate::server::store::Store;
 
-pub struct Server {/*store: Arc<Store>, tcp_listener: Arc<TcpListener>*/}
+pub struct Server {
+    address: SocketAddr,
+    state: State,
+    store: Option<Arc<Store>>,
+    tcp_listener: Option<Arc<TcpListener>>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum State {
+    New,
+    Running,
+    // Stopped,
+}
 
 impl Server {
-    pub async fn run(cfg: Config) -> JoinHandle<()> {
+    pub fn new(address: SocketAddr) -> Server {
+        Self {
+            address,
+            state: State::New,
+            store: Option::None,
+            tcp_listener: Option::None,
+        }
+    }
+
+    pub async fn run(self) -> Server {
+        //JoinHandle<()> {
         let store_arc = Arc::new(Store::new());
         let store = store_arc.clone();
         println!("> Created store");
 
-        let addr = cfg.addr;
-        let sock_srv_arc = Arc::new(TcpListener::bind(addr).await.unwrap());
-        let sock_srv = sock_srv_arc.clone();
-        println!("> Listening on {:?}", &addr);
+        let tcp_listener_arc = Arc::new(TcpListener::bind(&self.address).await.unwrap());
+        let tcp_listener = tcp_listener_arc.clone();
+        println!("> Listening on {:?}", &self.address);
 
         tokio::spawn(async move {
             // TODO: use select here to insert kill switch for shutdown
             loop {
-                let (socket, client_addr) = sock_srv.accept().await.unwrap();
+                let (socket, client_addr) = tcp_listener.accept().await.unwrap();
                 println!("> Got connection on {}", &client_addr);
 
                 let store = store.clone();
                 tokio::spawn(async move { Server::handle_requests(socket, store).await });
             }
-        })
+        });
+
+        Server {
+            address: self.address,
+            state: State::Running,
+            store: Some(store_arc),
+            tcp_listener: Some(tcp_listener_arc),
+        }
     }
 
     // async fn stop(&self) {
@@ -75,13 +102,13 @@ impl Server {
 
 #[cfg(test)]
 mod server_tests {
-    use std::net::SocketAddr;
-
     use bytes::Bytes;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
     use tokio::net::tcp::OwnedWriteHalf;
     use tokio::sync::mpsc;
     use tokio::sync::mpsc::Receiver;
+
+    use crate::test_support::gen::gen_addr;
 
     use super::*;
 
@@ -90,10 +117,9 @@ mod server_tests {
     }
 
     async fn setup() -> (BufWriter<OwnedWriteHalf>, Receiver<Bytes>) {
-        let port = port_scanner::request_open_port().unwrap();
-        let addr = SocketAddr::from(([127, 0, 0, 1], port));
-        // TODO: return this when testing ::stop()
-        let _ = Server::run(Config { addr }).await;
+        let addr = gen_addr();
+        // TODO: return this when testing Server#stop()
+        let _ = Server::new(addr).run().await;
 
         let (mut client_reader, client_writer) =
             match TcpStream::connect(addr).await.unwrap().into_split() {
@@ -110,6 +136,22 @@ mod server_tests {
         });
 
         (client_writer, rx)
+    }
+
+    #[tokio::test]
+    async fn constructs_server_struct() {
+        let addr = gen_addr();
+        let server = Server::new(addr);
+        assert_eq!(server.address, addr);
+        assert_eq!(server.state, State::New);
+        assert!(server.store.is_none());
+        assert!(server.tcp_listener.is_none());
+    }
+
+    #[tokio::test]
+    async fn updates_state_on_run() {
+        let server = Server::new(gen_addr()).run().await;
+        assert_eq!(server.state, State::Running);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

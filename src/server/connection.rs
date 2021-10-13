@@ -3,9 +3,9 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
 
+use crate::error::Result;
 use crate::frame::request::Request;
 use crate::frame::response::Response;
-use crate::server::error::Result;
 
 pub trait AsyncReader: AsyncRead + Unpin + Send {}
 impl AsyncReader for OwnedReadHalf {}
