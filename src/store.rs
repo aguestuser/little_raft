@@ -3,7 +3,7 @@ use dashmap::DashMap;
 /// Thin wrapper around a concurrent hashmap. Wrap it in an Arc to share
 /// between threads or tasks. (No Mutex needed!)
 pub struct Store {
-    pub(in crate::server::store) db: DashMap<String, String>,
+    pub(crate) db: DashMap<String, String>,
 }
 
 impl Store {

@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use tokio::net::{TcpListener, TcpStream};
 
-use crate::node::component::State;
-use crate::server::store::Store;
+use crate::node::State;
+use crate::store::Store;
 use crate::tcp::connection::Connection;
 use crate::tcp::request::Request;
 use crate::tcp::response::Response;
@@ -86,7 +86,7 @@ impl Server {
                     });
                 }
                 Err(e) => {
-                    // TODO: bubble up and re-establish connection? report error to client?
+                    // TODO: bubble up and re-establish connection? report error to client__?
                     eprintln!("ERROR reading request: {}", e.to_string());
                 }
             }

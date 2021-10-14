@@ -1,5 +1,5 @@
 use std::net::SocketAddr;
-use stors::server::server::Server;
+use stors::server::Server;
 
 #[tokio::main]
 async fn main() {
@@ -8,5 +8,5 @@ async fn main() {
     futures::future::pending().await
 }
 
-// NOTE: if we want to change this to an http server (or steal ideas about semantics), see:
+// NOTE: if we want to change this to an http server___ (or steal ideas about semantics), see:
 // https://docs.rs/hyper/0.14.13/hyper/server/index.html
