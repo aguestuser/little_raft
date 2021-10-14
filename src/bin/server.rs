@@ -1,5 +1,4 @@
 use std::net::SocketAddr;
-use stors::config::Config;
 use stors::server::server::Server;
 
 #[tokio::main]

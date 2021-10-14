@@ -1,11 +1,9 @@
-use bytes::Bytes;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, BufWriter};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
 
-use crate::error::Result;
-use crate::frame::request::Request;
-use crate::frame::response::Response;
+use crate::error;
+use crate::tcp::NEWLINE;
 
 pub trait AsyncReader: AsyncRead + Unpin + Send {}
 impl AsyncReader for OwnedReadHalf {}
@@ -28,17 +26,17 @@ impl Connection {
     }
 
     /// Read a `Request` from the socket
-    pub async fn read(&mut self) -> Result<Request> {
+    pub async fn read(&mut self) -> error::Result<Vec<u8>> {
         // TODO use self.buf (BytesMute w/ Cursor) here instead of allocating new buf?
         let mut buf = Vec::new();
-        self.input.read_until("\n".as_bytes()[0], &mut buf).await?;
-        Ok(buf.into())
+        self.input.read_until(NEWLINE, &mut buf).await?;
+        Ok(buf)
     }
 
     /// Write a `Response` to the socket
-    pub async fn write(&mut self, response: Response) -> Result<()> {
-        let bs: Bytes = response.into();
-        self.output.write_all(&bs).await?;
+    pub async fn write(&mut self, mut buf: Vec<u8>) -> error::Result<()> {
+        buf.push(NEWLINE);
+        self.output.write_all(&buf).await?;
         self.output.flush().await?;
         Ok(())
     }
@@ -48,35 +46,28 @@ impl Connection {
 mod connection_tests {
     use super::*;
 
-    #[tokio::test]
-    async fn reads() {
-        let request: Bytes = [r#"{"id":42,"type":"Get","key":"foo"}"#, "\n"]
+    lazy_static! {
+        static ref FRAME: Vec<u8> = [r#"{"id":42,"type":"Get","key":"foo"}"#, "\n"]
             .concat()
             .into();
+    }
 
+    #[tokio::test]
+    async fn reads() {
         let (mut connection, input_sender, _) = Connection::with_channel();
-        input_sender.send(request).unwrap();
+        input_sender.send(FRAME.clone()).unwrap();
 
-        let actual_read = connection.read().await.unwrap();
-        let expected_read = Request::Get {
-            id: 42,
-            key: "foo".to_string(),
-        };
-        assert_eq!(actual_read, expected_read);
+        assert_eq!(connection.read().await.unwrap(), *FRAME);
     }
 
     #[tokio::test]
     async fn writes() {
-        let response = Response::ToGet {
-            id: 42,
-            value: Some("foo".to_string()),
-        };
-
         let (mut connection, _, output_receiver) = Connection::with_channel();
-        let _ = connection.write(response).await;
+        let _ = connection.write(FRAME.clone()).await;
 
-        let actual_write: Bytes = output_receiver.recv().unwrap();
-        let expected_write: Bytes = [r#"{"id":42,"value":"foo"}"#, "\n"].concat().into();
-        assert_eq!(actual_write, expected_write);
+        assert_eq!(
+            output_receiver.recv().unwrap(),
+            [FRAME.clone(), b"\n".to_vec()].concat(),
+        );
     }
 }

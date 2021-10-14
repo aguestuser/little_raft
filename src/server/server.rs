@@ -3,23 +3,17 @@ use std::sync::Arc;
 
 use tokio::net::{TcpListener, TcpStream};
 
-use crate::frame::request::Request;
-use crate::frame::response::Response;
-use crate::server::connection::Connection;
+use crate::node::component::State;
 use crate::server::store::Store;
+use crate::tcp::connection::Connection;
+use crate::tcp::request::Request;
+use crate::tcp::response::Response;
 
 pub struct Server {
-    address: SocketAddr,
-    state: State,
-    store: Option<Arc<Store>>,
-    tcp_listener: Option<Arc<TcpListener>>,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub enum State {
-    New,
-    Running,
-    // Stopped,
+    pub address: SocketAddr,
+    pub state: State,
+    pub store: Option<Arc<Store>>,
+    pub tcp_listener: Option<Arc<TcpListener>>,
 }
 
 impl Server {
@@ -75,8 +69,8 @@ impl Server {
 
         loop {
             match connection.read().await {
-                Ok(req) => {
-                    let response: Response = match req {
+                Ok(frame) => {
+                    let response: Response = match frame.into() {
                         Request::Get { id, key } => {
                             let value = store.get(&key).await;
                             Response::ToGet { id, value }
@@ -87,7 +81,7 @@ impl Server {
                         }
                         Request::Invalid { req_hash, msg } => Response::Error { req_hash, msg },
                     };
-                    let _ = connection.write(response).await.map_err(|e| {
+                    let _ = connection.write(response.into()).await.map_err(|e| {
                         eprintln!("ERROR writing response: {}", e.to_string());
                     });
                 }
@@ -108,7 +102,7 @@ mod server_tests {
     use tokio::sync::mpsc;
     use tokio::sync::mpsc::Receiver;
 
-    use crate::test_support::gen::gen_addr;
+    use crate::test_support::gen::Gen;
 
     use super::*;
 
@@ -117,7 +111,7 @@ mod server_tests {
     }
 
     async fn setup() -> (BufWriter<OwnedWriteHalf>, Receiver<Bytes>) {
-        let addr = gen_addr();
+        let addr = Gen::socket_addr();
         // TODO: return this when testing Server#stop()
         let _ = Server::new(addr).run().await;
 
@@ -140,7 +134,7 @@ mod server_tests {
 
     #[tokio::test]
     async fn constructs_server_struct() {
-        let addr = gen_addr();
+        let addr = Gen::socket_addr();
         let server = Server::new(addr);
         assert_eq!(server.address, addr);
         assert_eq!(server.state, State::New);
@@ -150,7 +144,7 @@ mod server_tests {
 
     #[tokio::test]
     async fn updates_state_on_run() {
-        let server = Server::new(gen_addr()).run().await;
+        let server = Server::new(Gen::socket_addr()).run().await;
         assert_eq!(server.state, State::Running);
     }
 
