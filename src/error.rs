@@ -1,3 +1,5 @@
+#![allow(unused_imports)]
+
 #[cfg(feature = "std")]
 use std::error::Error;
 #[cfg(not(feature = "std"))]

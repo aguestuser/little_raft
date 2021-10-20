@@ -1,6 +1,7 @@
+#![allow(dead_code)]
 use std::net::SocketAddr;
 
-pub(crate) struct Gen {}
+pub struct Gen {}
 
 impl Gen {
     pub fn socket_addr() -> SocketAddr {

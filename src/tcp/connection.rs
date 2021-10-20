@@ -12,8 +12,8 @@ pub trait AsyncWriter: AsyncWrite + Unpin + Send {}
 impl AsyncWriter for OwnedWriteHalf {}
 
 pub struct Connection {
-    pub(crate) input: BufReader<Box<dyn AsyncReader>>,
-    pub(crate) output: BufWriter<Box<dyn AsyncWriter>>,
+    pub input: BufReader<Box<dyn AsyncReader>>,
+    pub output: BufWriter<Box<dyn AsyncWriter>>,
 }
 
 impl Connection {
@@ -34,9 +34,9 @@ impl Connection {
     }
 
     /// Write a `Response` to the socket
-    pub async fn write(&mut self, mut buf: Vec<u8>) -> error::Result<()> {
-        buf.push(NEWLINE);
-        self.output.write_all(&buf).await?;
+    pub async fn write(&mut self, buf: &Vec<u8>) -> error::Result<()> {
+        self.output.write_all(buf).await?;
+        self.output.write(&[NEWLINE]).await?;
         self.output.flush().await?;
         Ok(())
     }
@@ -63,7 +63,7 @@ mod connection_tests {
     #[tokio::test]
     async fn writes() {
         let (mut connection, _, output_receiver) = Connection::with_channel();
-        let _ = connection.write(FRAME.clone()).await;
+        let _ = connection.write(&FRAME).await;
 
         assert_eq!(
             output_receiver.recv().unwrap(),
