@@ -58,6 +58,7 @@ impl Client {
     }
 
     pub async fn write_many(&mut self, peer_addrs: &Vec<String>, msg: &Vec<u8>) -> Result<Vec<()>> {
+        // TODO: should this return a Vec<Result>?
         let connections = peer_addrs
             .into_iter()
             .map(|peer_addr| {
@@ -97,7 +98,6 @@ impl Client {
 #[cfg(test)]
 mod test_client {
     use super::*;
-    use crate::tcp::NEWLINE;
     use crate::test_support::gen::Gen;
     use std::collections::HashSet;
     use std::iter::FromIterator;
@@ -110,6 +110,11 @@ mod test_client {
         server_addrs: Vec<SocketAddr>,
         conn_rx: Receiver<SocketAddr>,
         msg_rx: Receiver<(SocketAddr, Vec<u8>)>,
+    }
+
+    lazy_static! {
+        static ref MSG: Vec<u8> = b"hello".to_vec();
+        static ref DELIMITED_MSG: Vec<u8> = b"hello\n".to_vec();
     }
 
     async fn setup() -> Runner {
@@ -137,9 +142,9 @@ mod test_client {
                     tokio::spawn(async move {
                         let mut conn = Connection::new(socket);
                         loop {
-                            let msg = conn.read().await.unwrap();
+                            let read_msg = conn.read().await.unwrap();
                             // println!("> Peer at {:?} got msg: {:?}", server_addr, msg);
-                            msg_tx.send((server_addr, msg)).await.unwrap();
+                            msg_tx.send((server_addr, read_msg)).await.unwrap();
                         }
                     });
                 }
@@ -201,13 +206,11 @@ mod test_client {
             let _ = conn_rx.recv().await.unwrap();
         }
 
-        let _ = client
-            .write(&server_addrs[0].to_string(), &b"hello".to_vec())
-            .await;
-        let (peer_addr, msg) = msg_rx.recv().await.unwrap();
+        let _ = client.write(&server_addrs[0].to_string(), &*MSG).await;
+        let (conn, received_msg) = msg_rx.recv().await.unwrap();
 
-        assert_eq!(peer_addr, server_addrs[0]);
-        assert_eq!(msg, b"hello\n".to_vec());
+        assert_eq!(conn, server_addrs[0]);
+        assert_eq!(received_msg, *DELIMITED_MSG);
     }
 
     #[tokio::test]
@@ -226,16 +229,19 @@ mod test_client {
             let _ = conn_rx.recv().await.unwrap();
         }
 
-        let msg = &b"hello".to_vec();
-        let _ = client.broadcast(msg).await.unwrap();
+        let _ = client.broadcast(&*MSG).await;
+
         let (peer_1, msg_1) = msg_rx.recv().await.unwrap();
         let (peer_2, msg_2) = msg_rx.recv().await.unwrap();
         let (peer_3, msg_3) = msg_rx.recv().await.unwrap();
 
-        let delimited_msg: Vec<u8> = [msg.clone(), vec![NEWLINE]].concat();
         assert_eq!(
-            vec![&msg_1, &msg_2, &msg_3],
-            vec![&delimited_msg, &delimited_msg, &delimited_msg]
+            vec![msg_1, msg_2, msg_3],
+            vec![
+                DELIMITED_MSG.clone(),
+                DELIMITED_MSG.clone(),
+                DELIMITED_MSG.clone()
+            ]
         );
         assert_eq!(
             HashSet::<_>::from_iter(vec![peer_1, peer_2, peer_3].into_iter()),
@@ -245,9 +251,6 @@ mod test_client {
 
     #[tokio::test]
     async fn writes_to_many_peers() {
-        let msg = &b"hello".to_vec();
-        let delimited_msg: Vec<u8> = [msg.clone(), vec![NEWLINE]].concat();
-
         let Runner {
             client_addr,
             server_addrs,
@@ -267,11 +270,14 @@ mod test_client {
             .map(|x| x.to_string())
             .collect::<Vec<String>>();
 
-        let _ = client.write_many(&recipient_addrs, msg).await.unwrap();
+        let _ = client.write_many(&recipient_addrs, &*MSG).await.unwrap();
         let (peer_1, msg_1) = msg_rx.recv().await.unwrap();
         let (peer_2, msg_2) = msg_rx.recv().await.unwrap();
 
-        assert_eq!(vec![&msg_1, &msg_2], vec![&delimited_msg, &delimited_msg],);
+        assert_eq!(
+            vec![msg_1, msg_2],
+            vec![DELIMITED_MSG.clone(), DELIMITED_MSG.clone()],
+        );
         assert_eq!(
             HashSet::<_>::from_iter(vec![peer_1.to_string(), peer_2.to_string()].into_iter()),
             HashSet::<_>::from_iter(recipient_addrs.into_iter()),
