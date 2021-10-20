@@ -3,6 +3,7 @@ use crate::node::State;
 use crate::tcp::connection::Connection;
 use dashmap::DashMap;
 
+use futures::StreamExt;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpSocket;
@@ -45,11 +46,14 @@ impl Client {
         Ok(())
     }
 
-    pub async fn write(&mut self, peer_addr: &String, msg: &Vec<u8>) -> Result<()> {
+    async fn write(conn_arc: Arc<Mutex<Connection>>, msg: Vec<u8>) -> Result<()> {
+        let mut conn = conn_arc.lock().await;
+        conn.write(&msg).await
+    }
+
+    pub async fn write_to(&mut self, peer_addr: &String, msg: &Vec<u8>) -> Result<()> {
         if let Some(conn_arc) = self.connections.get(peer_addr) {
-            let conn_arc = conn_arc.clone();
-            let mut conn = conn_arc.lock().await;
-            conn.write(msg).await
+            Self::write(conn_arc.clone(), msg.clone()).await
         } else {
             Err(Box::new(IllegalStateError::NoPeerAtAddress(
                 peer_addr.to_string(),
@@ -57,31 +61,25 @@ impl Client {
         }
     }
 
-    pub async fn write_many(&mut self, peer_addrs: &Vec<String>, msg: &Vec<u8>) -> Result<Vec<()>> {
-        // TODO: should this return a Vec<Result>?
+    pub async fn write_many(&mut self, peer_addrs: &Vec<String>, msg: &Vec<u8>) -> Vec<Result<()>> {
         let connections = peer_addrs
             .into_iter()
-            .map(|peer_addr| {
-                // TODO: don't use unwrap here!
-                let c_arc = self.connections.get(peer_addr).unwrap();
-                c_arc.clone()
-            })
+            .map(|peer_addr| self.connections.get(peer_addr).unwrap().clone())
             .collect::<Vec<Arc<Mutex<Connection>>>>();
 
-        let results: Vec<Result<()>> =
-            futures::future::try_join_all(connections.into_iter().map(|c_arc| {
-                let c_arc = c_arc.clone();
-                let msg = msg.clone();
-                tokio::spawn(async move {
-                    let mut c = c_arc.lock().await;
-                    c.write(&msg).await
-                })
-            }))
-            .await?;
-        results.into_iter().collect()
+        let writes = futures::stream::iter(
+            connections
+                .iter()
+                .map(|c_arc| tokio::spawn(Self::write(c_arc.clone(), msg.clone()))),
+        )
+        .buffer_unordered(connections.len())
+        .map(|r| r.unwrap_or_else(|e| Err(e.into()))) // un-nest Result<Result>
+        .collect::<Vec<Result<()>>>();
+
+        writes.await
     }
 
-    pub async fn broadcast(&mut self, msg: &Vec<u8>) -> Result<Vec<()>> {
+    pub async fn broadcast(&mut self, msg: &Vec<u8>) -> Vec<Result<()>> {
         let peer_addrs = self
             .connections
             .iter()
@@ -206,7 +204,7 @@ mod test_client {
             let _ = conn_rx.recv().await.unwrap();
         }
 
-        let _ = client.write(&server_addrs[0].to_string(), &*MSG).await;
+        let _ = client.write_to(&server_addrs[0].to_string(), &*MSG).await;
         let (conn, received_msg) = msg_rx.recv().await.unwrap();
 
         assert_eq!(conn, server_addrs[0]);
@@ -270,7 +268,7 @@ mod test_client {
             .map(|x| x.to_string())
             .collect::<Vec<String>>();
 
-        let _ = client.write_many(&recipient_addrs, &*MSG).await.unwrap();
+        let _ = client.write_many(&recipient_addrs, &*MSG).await;
         let (peer_1, msg_1) = msg_rx.recv().await.unwrap();
         let (peer_2, msg_2) = msg_rx.recv().await.unwrap();
 
