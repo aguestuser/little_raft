@@ -46,14 +46,26 @@ impl Client {
         Ok(())
     }
 
-    async fn write(conn_arc: Arc<Mutex<Connection>>, msg: Vec<u8>) -> Result<()> {
-        let mut conn = conn_arc.lock().await;
-        conn.write(&msg).await
+    async fn write(conn_arcs: Vec<Arc<Mutex<Connection>>>, msg: &Vec<u8>) -> Vec<Result<()>> {
+        futures::stream::iter(conn_arcs.iter().map(|conn_arc| {
+            let conn_arc = conn_arc.clone();
+            let msg = msg.clone();
+            tokio::spawn(async move {
+                let mut conn = conn_arc.lock().await;
+                conn.write(&msg).await
+            })
+        }))
+        .buffer_unordered(conn_arcs.len())
+        // un-nest Result<Result>
+        .map(|r| r.unwrap_or_else(|e| Err(e.into())))
+        .collect::<Vec<Result<()>>>()
+        .await
     }
 
-    pub async fn write_to(&mut self, peer_addr: &String, msg: &Vec<u8>) -> Result<()> {
+    pub async fn write_one(&mut self, peer_addr: &String, msg: &Vec<u8>) -> Result<()> {
         if let Some(conn_arc) = self.connections.get(peer_addr) {
-            Self::write(conn_arc.clone(), msg.clone()).await
+            let mut results = Self::write(vec![conn_arc.clone()], msg).await;
+            results.pop().unwrap()
         } else {
             Err(Box::new(IllegalStateError::NoPeerAtAddress(
                 peer_addr.to_string(),
@@ -66,17 +78,7 @@ impl Client {
             .into_iter()
             .map(|peer_addr| self.connections.get(peer_addr).unwrap().clone())
             .collect::<Vec<Arc<Mutex<Connection>>>>();
-
-        let writes = futures::stream::iter(
-            connections
-                .iter()
-                .map(|c_arc| tokio::spawn(Self::write(c_arc.clone(), msg.clone()))),
-        )
-        .buffer_unordered(connections.len())
-        .map(|r| r.unwrap_or_else(|e| Err(e.into()))) // un-nest Result<Result>
-        .collect::<Vec<Result<()>>>();
-
-        writes.await
+        Self::write(connections, msg).await
     }
 
     pub async fn broadcast(&mut self, msg: &Vec<u8>) -> Vec<Result<()>> {
@@ -204,7 +206,7 @@ mod test_client {
             let _ = conn_rx.recv().await.unwrap();
         }
 
-        let _ = client.write_to(&server_addrs[0].to_string(), &*MSG).await;
+        let _ = client.write_one(&server_addrs[0].to_string(), &*MSG).await;
         let (conn, received_msg) = msg_rx.recv().await.unwrap();
 
         assert_eq!(conn, server_addrs[0]);
