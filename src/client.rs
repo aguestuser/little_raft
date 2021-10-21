@@ -1,4 +1,4 @@
-use crate::error::{IllegalStateError, Result};
+use crate::error::{AsyncError, IllegalStateError, Result};
 use crate::node::State;
 use crate::tcp::connection::Connection;
 use dashmap::DashMap;
@@ -11,61 +11,59 @@ use tokio::sync::Mutex;
 
 pub struct Client {
     pub address: SocketAddr,
-    pub server_addresses: Vec<SocketAddr>,
+    pub peer_addresses: Vec<SocketAddr>,
     pub state: State,
-    // TODO: might need to be an Arc<Connection> to parallelize!
-    pub connections: DashMap<String, Arc<Mutex<Connection>>>,
+    pub peers: DashMap<String, Peer>,
+}
+
+pub struct Peer {
+    address: SocketAddr, // TODO: should this be a String?
+    connection: Arc<Mutex<Connection>>,
 }
 
 impl Client {
-    pub fn new(address: SocketAddr, server_addresses: Vec<SocketAddr>) -> Client {
+    pub fn new(address: SocketAddr, peer_addresses: Vec<SocketAddr>) -> Client {
         Self {
             address,
-            server_addresses,
+            peer_addresses,
             state: State::New,
-            connections: DashMap::new(),
+            peers: DashMap::new(),
         }
     }
 
     pub async fn run(&mut self) -> Result<()> {
-        let server_addresses = self.server_addresses.clone();
-        let connection_tuples: Vec<Result<(SocketAddr, Arc<Mutex<Connection>>)>> =
-            futures::future::try_join_all(server_addresses.into_iter().map(|addr| {
+        let peers: Vec<Result<Peer>> =
+            futures::future::try_join_all(self.peer_addresses.iter().map(|&address| {
                 tokio::spawn(async move {
                     let socket = TcpSocket::new_v4()?;
-                    let stream = socket.connect(addr).await?;
-                    Ok((addr, Arc::new(Mutex::new(Connection::new(stream)))))
+                    let stream = socket.connect(address).await?;
+                    let connection = Arc::new(Mutex::new(Connection::new(stream)));
+                    Ok(Peer {
+                        address,
+                        connection,
+                    })
                 })
             }))
             .await?;
-        connection_tuples.into_iter().for_each(|ct| {
-            if let Ok((addr, conn)) = ct {
-                let _ = self.connections.insert(addr.to_string(), conn);
+
+        peers.into_iter().for_each(|ct| {
+            // TODO: try to perform this insertion in body of `try_join_all` (blocker: Error types!)
+            if let Ok(peer) = ct {
+                self.peers.insert(peer.address.to_string(), peer);
             }
         });
+
         Ok(())
     }
 
-    async fn write(conn_arcs: Vec<Arc<Mutex<Connection>>>, msg: &Vec<u8>) -> Vec<Result<()>> {
-        futures::stream::iter(conn_arcs.iter().map(|conn_arc| {
-            let conn_arc = conn_arc.clone();
-            let msg = msg.clone();
-            tokio::spawn(async move {
-                let mut conn = conn_arc.lock().await;
-                conn.write(&msg).await
-            })
-        }))
-        .buffer_unordered(conn_arcs.len())
-        // un-nest Result<Result>
-        .map(|r| r.unwrap_or_else(|e| Err(e.into())))
-        .collect::<Vec<Result<()>>>()
-        .await
+    async fn write(locked_connection: Arc<Mutex<Connection>>, msg: Vec<u8>) -> Result<()> {
+        let mut connection = locked_connection.lock().await;
+        connection.write(&msg).await
     }
 
     pub async fn write_one(&mut self, peer_addr: &String, msg: &Vec<u8>) -> Result<()> {
-        if let Some(conn_arc) = self.connections.get(peer_addr) {
-            let mut results = Self::write(vec![conn_arc.clone()], msg).await;
-            results.pop().unwrap()
+        if let Some(peer) = self.peers.get(peer_addr) {
+            Self::write(peer.connection.clone(), msg.clone()).await
         } else {
             Err(Box::new(IllegalStateError::NoPeerAtAddress(
                 peer_addr.to_string(),
@@ -74,16 +72,36 @@ impl Client {
     }
 
     pub async fn write_many(&mut self, peer_addrs: &Vec<String>, msg: &Vec<u8>) -> Vec<Result<()>> {
-        let connections = peer_addrs
+        let num_writes = peer_addrs.len();
+
+        let peers_by_address = peer_addrs
+            .clone()
             .into_iter()
-            .map(|peer_addr| self.connections.get(peer_addr).unwrap().clone())
-            .collect::<Vec<Arc<Mutex<Connection>>>>();
-        Self::write(connections, msg).await
+            .map(|peer_addr| (self.peers.get(&peer_addr), peer_addr));
+
+        let writes =
+            futures::stream::iter(peers_by_address.map(|(peer_entry, addr)| match peer_entry {
+                Some(peer) => tokio::spawn(Self::write(peer.connection.clone(), msg.clone())),
+                None => tokio::spawn(async move {
+                    // TODO: can we avoid spawning here since we know we don't want to perform work?
+                    //  blocker: matching `Error` types!
+                    Err(
+                        Box::new(IllegalStateError::NoPeerAtAddress(addr.to_string()))
+                            as AsyncError,
+                    )
+                }),
+            }));
+
+        writes
+            .buffer_unordered(num_writes)
+            .map(|r| r.unwrap_or_else(|e| Err(e.into()))) // un-nest Result<Result>
+            .collect::<Vec<Result<()>>>()
+            .await
     }
 
     pub async fn broadcast(&mut self, msg: &Vec<u8>) -> Vec<Result<()>> {
         let peer_addrs = self
-            .connections
+            .peers
             .iter()
             .map(|entry| entry.key().to_string())
             .collect::<Vec<String>>();
@@ -166,8 +184,8 @@ mod test_client {
         let client = Client::new(client_addr, server_addrs.clone());
 
         assert_eq!(client.address, client_addr);
-        assert_eq!(client.server_addresses, server_addrs.clone());
-        assert!(client.connections.is_empty());
+        assert_eq!(client.peer_addresses, server_addrs.clone());
+        assert!(client.peers.is_empty());
     }
 
     #[tokio::test]
@@ -187,7 +205,7 @@ mod test_client {
         }
 
         assert_eq!(connected_addrs.len(), server_addrs.len());
-        assert_eq!(client.connections.len(), server_addrs.len())
+        assert_eq!(client.peers.len(), server_addrs.len())
     }
 
     #[tokio::test]
