@@ -6,12 +6,30 @@ use std::sync::mpsc::{Receiver, Sender};
 use futures::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, BufReader, BufWriter, ReadBuf};
 
-use crate::tcp::connection::Connection;
-use crate::tcp::connection::{AsyncReader, AsyncWriter};
+use crate::protocol::connection::ClientConnection;
+use crate::protocol::connection::ServerConnection;
+use crate::protocol::connection::{AsyncReader, AsyncWriter};
 
 #[allow(dead_code)]
-impl Connection {
-    pub(crate) fn with_channel() -> (Connection, Sender<Vec<u8>>, Receiver<Vec<u8>>) {
+impl ClientConnection {
+    pub(crate) fn with_channel() -> (ClientConnection, Sender<Vec<u8>>, Receiver<Vec<u8>>) {
+        let (input_sender, input_receiver) = mpsc::channel::<Vec<u8>>();
+        let (output_sender, output_receiver) = mpsc::channel::<Vec<u8>>();
+        let connection = Self {
+            input: BufReader::new(Box::new(FakeTcpReader {
+                input: input_receiver,
+            })),
+            output: BufWriter::new(Box::new(FakeTcpWriter {
+                output: output_sender,
+            })),
+        };
+        (connection, input_sender, output_receiver)
+    }
+}
+
+#[allow(dead_code)]
+impl ServerConnection {
+    pub(crate) fn with_channel() -> (ServerConnection, Sender<Vec<u8>>, Receiver<Vec<u8>>) {
         let (input_sender, input_receiver) = mpsc::channel::<Vec<u8>>();
         let (output_sender, output_receiver) = mpsc::channel::<Vec<u8>>();
         let connection = Self {
@@ -63,8 +81,7 @@ impl AsyncWrite for FakeTcpWriter {
         _: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<std::result::Result<usize, std::io::Error>> {
-        let bs: Vec<u8> = buf.to_vec();
-        self.output.send(bs).unwrap();
+        self.output.send(buf.to_vec()).unwrap();
         return Poll::Ready(Ok(buf.len()));
     }
     fn poll_flush(

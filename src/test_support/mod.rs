@@ -1,2 +1,2 @@
-pub mod connection;
+mod connection;
 pub mod gen;

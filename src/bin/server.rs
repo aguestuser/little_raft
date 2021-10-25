@@ -1,5 +1,5 @@
 use std::net::SocketAddr;
-use stors::server::Server;
+use stors::protocol::server::Server;
 
 #[tokio::main]
 async fn main() {

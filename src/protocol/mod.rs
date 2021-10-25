@@ -1,6 +1,8 @@
+pub mod client;
 pub mod connection;
 pub mod request;
 pub mod response;
+pub mod server;
 
 pub const NEWLINE: u8 = '\n' as u8;
 

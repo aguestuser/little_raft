@@ -4,10 +4,10 @@ use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 
 use crate::node::State;
+use crate::protocol::connection::ServerConnection;
+use crate::protocol::request::Request;
+use crate::protocol::response::Response;
 use crate::store::Store;
-use crate::tcp::connection::Connection;
-use crate::tcp::request::Request;
-use crate::tcp::response::Response;
 
 pub struct Server {
     pub address: SocketAddr,
@@ -65,12 +65,12 @@ impl Server {
 
     /// Process data from a socket connection
     async fn handle_requests(socket: TcpStream, store: Arc<Store>) {
-        let mut connection = Connection::new(socket);
+        let mut connection = ServerConnection::new(socket);
 
         loop {
             match connection.read().await {
-                Ok(frame) => {
-                    let response: Response = match frame.into() {
+                Ok(req) => {
+                    let response: Response = match req {
                         Request::Get { id, key } => {
                             let value = store.get(&key).await;
                             Response::ToGet { id, value }
@@ -158,7 +158,9 @@ mod server_tests {
         writer.write_all(&request).await.unwrap();
         writer.flush().await.unwrap();
 
-        let expected_response: Bytes = [r#"{"id":0,"value":null}"#, "\n"].concat().into();
+        let expected_response: Bytes = [r#"{"type":"ToGet","id":0,"value":null}"#, "\n"]
+            .concat()
+            .into();
         let actual_response = receiver.recv().await.unwrap();
         assert_eq!(expected_response, actual_response);
     }
@@ -173,7 +175,9 @@ mod server_tests {
         writer.write_all(&request).await.unwrap();
         writer.flush().await.unwrap();
 
-        let expected_response: Bytes = [r#"{"id":0,"was_modified":true}"#, "\n"].concat().into();
+        let expected_response: Bytes = [r#"{"type":"ToSet","id":0,"was_modified":true}"#, "\n"]
+            .concat()
+            .into();
         let actual_response = receiver.recv().await.unwrap();
         assert_eq!(expected_response, actual_response);
     }
@@ -195,11 +199,15 @@ mod server_tests {
         writer.flush().await.unwrap();
 
         let actual_resp_1 = receiver.recv().await.unwrap();
-        let expected_resp_1: Bytes = [r#"{"id":0,"was_modified":true}"#, "\n"].concat().into();
+        let expected_resp_1: Bytes = [r#"{"type":"ToSet","id":0,"was_modified":true}"#, "\n"]
+            .concat()
+            .into();
         assert_eq!(expected_resp_1, actual_resp_1);
 
         let actual_resp_1 = receiver.recv().await.unwrap();
-        let expected_resp_1: Bytes = [r#"{"id":1,"was_modified":false}"#, "\n"].concat().into();
+        let expected_resp_1: Bytes = [r#"{"type":"ToSet","id":1,"was_modified":false}"#, "\n"]
+            .concat()
+            .into();
         assert_eq!(expected_resp_1, actual_resp_1);
     }
 
@@ -224,15 +232,21 @@ mod server_tests {
         writer.write_all(&get_req_2).await.unwrap();
         writer.flush().await.unwrap();
 
-        let expected_resp_0: Bytes = [r#"{"id":0,"value":null}"#, "\n"].concat().into();
+        let expected_resp_0: Bytes = [r#"{"type":"ToGet","id":0,"value":null}"#, "\n"]
+            .concat()
+            .into();
         let actual_resp_0 = receiver.recv().await.unwrap();
         assert_eq!(expected_resp_0, actual_resp_0);
 
-        let expected_resp_1: Bytes = [r#"{"id":1,"was_modified":true}"#, "\n"].concat().into();
+        let expected_resp_1: Bytes = [r#"{"type":"ToSet","id":1,"was_modified":true}"#, "\n"]
+            .concat()
+            .into();
         let actual_resp_1 = receiver.recv().await.unwrap();
         assert_eq!(expected_resp_1, actual_resp_1);
 
-        let expected_resp_2: Bytes = [r#"{"id":2,"value":"bar"}"#, "\n"].concat().into();
+        let expected_resp_2: Bytes = [r#"{"type":"ToGet","id":2,"value":"bar"}"#, "\n"]
+            .concat()
+            .into();
         let actual_resp_2 = receiver.recv().await.unwrap();
         assert_eq!(expected_resp_2, actual_resp_2);
     }
@@ -250,7 +264,7 @@ mod server_tests {
 
         let actual_resp = receiver.recv().await.unwrap();
         let expected_resp: Bytes = [
-            r#"{"req_hash":10867052927846470595,"msg":"missing field `value`"}"#,
+            r#"{"type":"Error","req_hash":10867052927846470595,"msg":"missing field `value`"}"#,
             "\n",
         ]
         .concat()

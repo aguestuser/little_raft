@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json;
 
 #[derive(Clone, PartialEq, Debug, Deserialize, Serialize)]
-#[serde(untagged)]
+#[serde(tag = "type", deny_unknown_fields)]
 pub enum Response {
     ToGet { id: u64, value: Option<String> },
     ToSet { id: u64, was_modified: bool },
@@ -28,7 +28,7 @@ mod response_tests {
 
     #[test]
     fn deserializing_get_response() {
-        let input: Vec<u8> = r#"{"id":42,"value":"bar"}"#.into();
+        let input: Vec<u8> = r#"{"type":"ToGet","id":42,"value":"bar"}"#.into();
 
         assert_eq!(
             Response::from(input),
@@ -41,7 +41,7 @@ mod response_tests {
 
     #[test]
     fn serializing_get_response() {
-        let expected: Vec<u8> = r#"{"id":42,"value":"bar"}"#.into();
+        let expected: Vec<u8> = r#"{"type":"ToGet","id":42,"value":"bar"}"#.into();
         let actual: Vec<u8> = Response::ToGet {
             id: 42,
             value: Some("bar".to_string()),
@@ -53,7 +53,7 @@ mod response_tests {
 
     #[test]
     fn serializing_set_response() {
-        let expected: Vec<u8> = r#"{"id":42,"was_modified":true}"#.into();
+        let expected: Vec<u8> = r#"{"type":"ToSet","id":42,"was_modified":true}"#.into();
         let actual: Vec<u8> = Response::ToSet {
             id: 42,
             was_modified: true,
@@ -64,7 +64,7 @@ mod response_tests {
 
     #[test]
     fn serializing_error_response() {
-        let expected: Vec<u8> = r#"{"req_hash":42,"msg":"whoops!"}"#.into();
+        let expected: Vec<u8> = r#"{"type":"Error","req_hash":42,"msg":"whoops!"}"#.into();
         let actual: Vec<u8> = Response::Error {
             req_hash: 42,
             msg: "whoops!".to_string(),
