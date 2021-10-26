@@ -9,6 +9,7 @@ use tokio::io::{AsyncRead, AsyncWrite, BufReader, BufWriter, ReadBuf};
 use crate::protocol::connection::ClientConnection;
 use crate::protocol::connection::ServerConnection;
 use crate::protocol::connection::{AsyncReader, AsyncWriter};
+use tokio::sync::Mutex;
 
 #[allow(dead_code)]
 impl ClientConnection {
@@ -16,12 +17,12 @@ impl ClientConnection {
         let (input_sender, input_receiver) = mpsc::channel::<Vec<u8>>();
         let (output_sender, output_receiver) = mpsc::channel::<Vec<u8>>();
         let connection = Self {
-            input: BufReader::new(Box::new(FakeTcpReader {
+            input: Mutex::new(BufReader::new(Box::new(FakeTcpReader {
                 input: input_receiver,
-            })),
-            output: BufWriter::new(Box::new(FakeTcpWriter {
+            }))),
+            output: Mutex::new(BufWriter::new(Box::new(FakeTcpWriter {
                 output: output_sender,
-            })),
+            }))),
         };
         (connection, input_sender, output_receiver)
     }
@@ -33,12 +34,12 @@ impl ServerConnection {
         let (input_sender, input_receiver) = mpsc::channel::<Vec<u8>>();
         let (output_sender, output_receiver) = mpsc::channel::<Vec<u8>>();
         let connection = Self {
-            input: BufReader::new(Box::new(FakeTcpReader {
+            input: Mutex::new(BufReader::new(Box::new(FakeTcpReader {
                 input: input_receiver,
-            })),
-            output: BufWriter::new(Box::new(FakeTcpWriter {
+            }))),
+            output: Mutex::new(BufWriter::new(Box::new(FakeTcpWriter {
                 output: output_sender,
-            })),
+            }))),
         };
         (connection, input_sender, output_receiver)
     }

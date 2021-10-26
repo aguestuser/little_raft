@@ -4,7 +4,6 @@ use std::sync::Arc;
 use dashmap::DashMap;
 use futures::StreamExt;
 use tokio::net::TcpSocket;
-use tokio::sync::Mutex;
 
 use crate::error::{AsyncError, IllegalStateError, Result};
 use crate::node::State;
@@ -20,7 +19,7 @@ pub struct Client {
 
 pub struct Peer {
     address: SocketAddr, // TODO: should this be a String?
-    connection: Arc<Mutex<ClientConnection>>,
+    connection: Arc<ClientConnection>,
 }
 
 impl Client {
@@ -39,7 +38,7 @@ impl Client {
                 tokio::spawn(async move {
                     let socket = TcpSocket::new_v4()?;
                     let stream = socket.connect(address).await?;
-                    let connection = Arc::new(Mutex::new(ClientConnection::new(stream)));
+                    let connection = Arc::new(ClientConnection::new(stream));
                     Ok(Peer {
                         address,
                         connection,
@@ -58,8 +57,7 @@ impl Client {
         Ok(())
     }
 
-    async fn write(locked_connection: Arc<Mutex<ClientConnection>>, req: Request) -> Result<()> {
-        let mut connection = locked_connection.lock().await;
+    async fn write(connection: Arc<ClientConnection>, req: Request) -> Result<()> {
         connection.write(&req).await
     }
 
@@ -124,7 +122,6 @@ mod test_client {
     use tokio::sync::mpsc;
     use tokio::sync::mpsc::Receiver;
 
-    use crate::protocol;
     use crate::protocol::connection::ServerConnection;
     use crate::test_support::gen::Gen;
 
@@ -167,7 +164,7 @@ mod test_client {
                     let msg_tx = msg_tx.clone();
 
                     tokio::spawn(async move {
-                        let mut conn = ServerConnection::new(socket);
+                        let conn = ServerConnection::new(socket);
                         loop {
                             let read_msg = conn.read().await.unwrap();
                             // println!("> Peer at {:?} got request: {:?}", peer_addr, msg);

@@ -65,7 +65,7 @@ impl Server {
 
     /// Process data from a socket connection
     async fn handle_requests(socket: TcpStream, store: Arc<Store>) {
-        let mut connection = ServerConnection::new(socket);
+        let connection = ServerConnection::new(socket);
 
         loop {
             match connection.read().await {
