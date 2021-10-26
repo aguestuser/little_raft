@@ -11,39 +11,28 @@ use crate::protocol::connection::ServerConnection;
 use crate::protocol::connection::{AsyncReader, AsyncWriter};
 use tokio::sync::Mutex;
 
-#[allow(dead_code)]
-impl ClientConnection {
-    pub(crate) fn with_channel() -> (ClientConnection, Sender<Vec<u8>>, Receiver<Vec<u8>>) {
-        let (input_sender, input_receiver) = mpsc::channel::<Vec<u8>>();
-        let (output_sender, output_receiver) = mpsc::channel::<Vec<u8>>();
-        let connection = Self {
-            input: Mutex::new(BufReader::new(Box::new(FakeTcpReader {
-                input: input_receiver,
-            }))),
-            output: Mutex::new(BufWriter::new(Box::new(FakeTcpWriter {
-                output: output_sender,
-            }))),
-        };
-        (connection, input_sender, output_receiver)
-    }
+macro_rules! connection_with_channel_of {
+    ($struct_name:ident) => {
+        impl $struct_name {
+            pub(crate) fn with_channel() -> ($struct_name, Sender<Vec<u8>>, Receiver<Vec<u8>>) {
+                let (input_sender, input_receiver) = mpsc::channel::<Vec<u8>>();
+                let (output_sender, output_receiver) = mpsc::channel::<Vec<u8>>();
+                let connection = Self {
+                    input: Mutex::new(BufReader::new(Box::new(FakeTcpReader {
+                        input: input_receiver,
+                    }))),
+                    output: Mutex::new(BufWriter::new(Box::new(FakeTcpWriter {
+                        output: output_sender,
+                    }))),
+                };
+                (connection, input_sender, output_receiver)
+            }
+        }
+    };
 }
 
-#[allow(dead_code)]
-impl ServerConnection {
-    pub(crate) fn with_channel() -> (ServerConnection, Sender<Vec<u8>>, Receiver<Vec<u8>>) {
-        let (input_sender, input_receiver) = mpsc::channel::<Vec<u8>>();
-        let (output_sender, output_receiver) = mpsc::channel::<Vec<u8>>();
-        let connection = Self {
-            input: Mutex::new(BufReader::new(Box::new(FakeTcpReader {
-                input: input_receiver,
-            }))),
-            output: Mutex::new(BufWriter::new(Box::new(FakeTcpWriter {
-                output: output_sender,
-            }))),
-        };
-        (connection, input_sender, output_receiver)
-    }
-}
+connection_with_channel_of!(ClientConnection);
+connection_with_channel_of!(ServerConnection);
 
 // READ
 
