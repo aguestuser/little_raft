@@ -58,7 +58,7 @@ impl Client {
     }
 
     async fn write(connection: Arc<ClientConnection>, req: Request) -> Result<()> {
-        connection.write(&req).await
+        connection.write(req).await
     }
 
     pub async fn write_one(&mut self, peer_addr: &String, req: &Request) -> Result<()> {

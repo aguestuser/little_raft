@@ -81,7 +81,7 @@ impl Server {
                         }
                         Request::Invalid { req_hash, msg } => Response::Error { req_hash, msg },
                     };
-                    let _ = connection.write(&response.into()).await.map_err(|e| {
+                    let _ = connection.write(response.into()).await.map_err(|e| {
                         eprintln!("ERROR writing response: {}", e.to_string());
                     });
                 }

@@ -6,33 +6,32 @@ use std::sync::mpsc::{Receiver, Sender};
 use futures::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, BufReader, BufWriter, ReadBuf};
 
-use crate::protocol::connection::ClientConnection;
-use crate::protocol::connection::ServerConnection;
+use crate::protocol::connection::Connection;
 use crate::protocol::connection::{AsyncReader, AsyncWriter};
+use std::marker::PhantomData;
 use tokio::sync::Mutex;
 
-macro_rules! connection_with_channel_of {
-    ($struct_name:ident) => {
-        impl $struct_name {
-            pub(crate) fn with_channel() -> ($struct_name, Sender<Vec<u8>>, Receiver<Vec<u8>>) {
-                let (input_sender, input_receiver) = mpsc::channel::<Vec<u8>>();
-                let (output_sender, output_receiver) = mpsc::channel::<Vec<u8>>();
-                let connection = Self {
-                    input: Mutex::new(BufReader::new(Box::new(FakeTcpReader {
-                        input: input_receiver,
-                    }))),
-                    output: Mutex::new(BufWriter::new(Box::new(FakeTcpWriter {
-                        output: output_sender,
-                    }))),
-                };
-                (connection, input_sender, output_receiver)
-            }
-        }
-    };
+impl<I, O> Connection<I, O>
+where
+    I: From<Vec<u8>>,
+    O: Into<Vec<u8>>,
+{
+    pub fn with_channel() -> (Connection<I, O>, Sender<Vec<u8>>, Receiver<Vec<u8>>) {
+        let (input_sender, input_receiver) = mpsc::channel::<Vec<u8>>();
+        let (output_sender, output_receiver) = mpsc::channel::<Vec<u8>>();
+        let connection = Self {
+            input: Mutex::new(BufReader::new(Box::new(FakeTcpReader {
+                input: input_receiver,
+            }))),
+            output: Mutex::new(BufWriter::new(Box::new(FakeTcpWriter {
+                output: output_sender,
+            }))),
+            input_frame: PhantomData,
+            output_frame: PhantomData,
+        };
+        (connection, input_sender, output_receiver)
+    }
 }
-
-connection_with_channel_of!(ClientConnection);
-connection_with_channel_of!(ServerConnection);
 
 // READ
 

@@ -2,10 +2,11 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
 
-use crate::error;
+use crate::error::Result;
 use crate::protocol::request::Request;
 use crate::protocol::response::Response;
 use crate::protocol::NEWLINE;
+use std::marker::PhantomData;
 use tokio::sync::Mutex;
 
 pub trait AsyncReader: AsyncRead + Unpin + Send {}
@@ -14,52 +15,63 @@ impl AsyncReader for OwnedReadHalf {}
 pub trait AsyncWriter: AsyncWrite + Unpin + Send {}
 impl AsyncWriter for OwnedWriteHalf {}
 
-macro_rules! connection_of {
-    ($struct_name:ident, $input_type:ty, $output_type:ty) => {
-        pub struct $struct_name {
-            pub input: Mutex<BufReader<Box<dyn AsyncReader>>>,
-            pub output: Mutex<BufWriter<Box<dyn AsyncWriter>>>,
-        }
-
-        impl $struct_name {
-            /// Create a new `$struct_name` backed by `socket`, with read and write buffers initialized.
-            pub fn new(socket: TcpStream) -> $struct_name {
-                let (r, w) = socket.into_split();
-                let input = Mutex::new(BufReader::new(Box::new(r) as Box<dyn AsyncReader>));
-                let output = Mutex::new(BufWriter::new(Box::new(w) as Box<dyn AsyncWriter>));
-                Self { input, output }
-            }
-
-            /// Read a `$input_type` from the socket
-            pub async fn read(&self) -> error::Result<$input_type> {
-                // TODO: use a Cursor<BytesMut> here instead of a Vec<u8> for buf?
-                //  (will require manually impl of `read_until`)
-                let mut buf = Vec::new();
-
-                let mut input = self.input.lock().await;
-                input.read_until(NEWLINE, &mut buf).await?;
-                let frame: $input_type = buf.into();
-
-                Ok(frame)
-            }
-
-            /// Write a `$output_type` to the socket
-            pub async fn write(&self, frame: &$output_type) -> error::Result<()> {
-                let bytes: Vec<u8> = frame.clone().into();
-
-                let mut output = self.output.lock().await;
-                output.write_all(&bytes).await?;
-                output.write(&[NEWLINE]).await?;
-                output.flush().await?;
-
-                Ok(())
-            }
-        }
-    };
+pub struct Connection<InputFrame, OutputFrame>
+where
+    InputFrame: From<Vec<u8>>,
+    OutputFrame: Into<Vec<u8>>,
+{
+    pub input: Mutex<BufReader<Box<dyn AsyncReader>>>,
+    pub output: Mutex<BufWriter<Box<dyn AsyncWriter>>>,
+    pub input_frame: PhantomData<InputFrame>,
+    pub output_frame: PhantomData<OutputFrame>,
 }
 
-connection_of!(ClientConnection, Response, Request);
-connection_of!(ServerConnection, Request, Response);
+impl<InputFrame, OutputFrame> Connection<InputFrame, OutputFrame>
+where
+    InputFrame: From<Vec<u8>>,
+    OutputFrame: Into<Vec<u8>>,
+{
+    /// Create a new `Connection` backed by `socket`, with read and write buffers initialized.
+    pub fn new(socket: TcpStream) -> Connection<InputFrame, OutputFrame> {
+        let (r, w) = socket.into_split();
+        let input = Mutex::new(BufReader::new(Box::new(r) as Box<dyn AsyncReader>));
+        let output = Mutex::new(BufWriter::new(Box::new(w) as Box<dyn AsyncWriter>));
+        Self {
+            input,
+            output,
+            input_frame: PhantomData,
+            output_frame: PhantomData,
+        }
+    }
+
+    /// Read a `Request` or `Response` from the socket
+    pub async fn read(&self) -> Result<InputFrame> {
+        // TODO: use a Cursor<BytesMut> here instead of a Vec<u8> for buf?
+        //  (will require manually impl of `read_until`)
+        let mut buf = Vec::new();
+
+        let mut input = self.input.lock().await;
+        input.read_until(NEWLINE, &mut buf).await?;
+        let frame: InputFrame = buf.into();
+
+        Ok(frame)
+    }
+
+    /// Write a `Request` or `Response` to the socket
+    pub async fn write(&self, frame: OutputFrame) -> Result<()> {
+        let bytes: Vec<u8> = frame.into();
+
+        let mut output = self.output.lock().await;
+        output.write_all(&bytes).await?;
+        output.write(&[NEWLINE]).await?;
+        output.flush().await?;
+
+        Ok(())
+    }
+}
+
+pub type ClientConnection = Connection<Response, Request>;
+pub type ServerConnection = Connection<Request, Response>;
 
 #[cfg(test)]
 mod connection_tests {
@@ -94,7 +106,7 @@ mod connection_tests {
             .into();
 
         let (connection, _, output_receiver) = ClientConnection::with_channel();
-        let _ = connection.write(&request).await;
+        let _ = connection.write(request).await;
 
         assert_eq!(output_receiver.recv().unwrap(), request_bytes);
     }
@@ -126,7 +138,7 @@ mod connection_tests {
             .into();
 
         let (connection, _, output_receiver) = ServerConnection::with_channel();
-        let _ = connection.write(&response).await;
+        let _ = connection.write(response).await;
 
         assert_eq!(output_receiver.recv().unwrap(), response_bytes);
     }
