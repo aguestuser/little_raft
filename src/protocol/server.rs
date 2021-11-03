@@ -5,8 +5,9 @@ use tokio::net::{TcpListener, TcpStream};
 
 use crate::node::State;
 use crate::protocol::connection::ServerConnection;
+use crate::protocol::request::Command::{Get, Invalid, Set};
 use crate::protocol::request::Request;
-use crate::protocol::response::Response;
+use crate::protocol::response::{Outcome, Response};
 use crate::store::Store;
 
 pub struct Server {
@@ -69,17 +70,26 @@ impl Server {
 
         loop {
             match connection.read().await {
-                Ok(req) => {
-                    let response: Response = match req {
-                        Request::Get { id, key } => {
+                Ok(Request { id, command }) => {
+                    let response: Response = match command {
+                        Get { key } => {
                             let value = store.get(&key).await;
-                            Response::ToGet { id, value }
+                            Response {
+                                id,
+                                outcome: Outcome::OfGet { value },
+                            }
                         }
-                        Request::Set { id, key, value } => {
+                        Set { key, value } => {
                             let was_modified = store.set(&key, &value).await;
-                            Response::ToSet { id, was_modified }
+                            Response {
+                                id,
+                                outcome: Outcome::OfSet { was_modified },
+                            }
                         }
-                        Request::Invalid { req_hash, msg } => Response::Error { req_hash, msg },
+                        Invalid { msg } => Response {
+                            id,
+                            outcome: Outcome::Error { msg },
+                        },
                     };
                     let _ = connection.write(response.into()).await.map_err(|e| {
                         eprintln!("ERROR writing response: {}", e.to_string());
@@ -152,15 +162,16 @@ mod server_tests {
     async fn performs_get() {
         let (mut writer, mut receiver) = setup().await;
 
-        let request: Bytes = [r#"{"id":0,"type":"Get","key":"foo"}"#, "\n"]
+        let request: Bytes = [r#"{"id":0,"command":{"type":"Get","key":"foo"}}"#, "\n"]
             .concat()
             .into();
         writer.write_all(&request).await.unwrap();
         writer.flush().await.unwrap();
 
-        let expected_response: Bytes = [r#"{"type":"ToGet","id":0,"value":null}"#, "\n"]
-            .concat()
-            .into();
+        let expected_response: Bytes =
+            [r#"{"id":0,"outcome":{"type":"OfGet","value":null}}"#, "\n"]
+                .concat()
+                .into();
         let actual_response = receiver.recv().await.unwrap();
         assert_eq!(expected_response, actual_response);
     }
@@ -169,15 +180,21 @@ mod server_tests {
     async fn performs_set() {
         let (mut writer, mut receiver) = setup().await;
 
-        let request: Bytes = [r#"{"id":0,"type":"Set","key":"foo","value":"bar"}"#, "\n"]
-            .concat()
-            .into();
+        let request: Bytes = [
+            r#"{"id":0,"command":{"type":"Set","key":"foo","value":"bar"}}"#,
+            "\n",
+        ]
+        .concat()
+        .into();
         writer.write_all(&request).await.unwrap();
         writer.flush().await.unwrap();
 
-        let expected_response: Bytes = [r#"{"type":"ToSet","id":0,"was_modified":true}"#, "\n"]
-            .concat()
-            .into();
+        let expected_response: Bytes = [
+            r#"{"id":0,"outcome":{"type":"OfSet","was_modified":true}}"#,
+            "\n",
+        ]
+        .concat()
+        .into();
         let actual_response = receiver.recv().await.unwrap();
         assert_eq!(expected_response, actual_response);
     }
@@ -186,12 +203,18 @@ mod server_tests {
     async fn performs_set_idempotently() {
         let (mut writer, mut receiver) = setup().await;
 
-        let req_0: Bytes = [r#"{"id":0,"type":"Set","key":"foo","value":"bar"}"#, "\n"]
-            .concat()
-            .into();
-        let req_1: Bytes = [r#"{"id":1,"type":"Set","key":"foo","value":"bar"}"#, "\n"]
-            .concat()
-            .into();
+        let req_0: Bytes = [
+            r#"{"id":0,"command":{"type":"Set","key":"foo","value":"bar"}}"#,
+            "\n",
+        ]
+        .concat()
+        .into();
+        let req_1: Bytes = [
+            r#"{"id":1,"command":{"type":"Set","key":"foo","value":"bar"}}"#,
+            "\n",
+        ]
+        .concat()
+        .into();
 
         writer.write_all(&req_0).await.unwrap();
         writer.flush().await.unwrap();
@@ -199,15 +222,21 @@ mod server_tests {
         writer.flush().await.unwrap();
 
         let actual_resp_1 = receiver.recv().await.unwrap();
-        let expected_resp_1: Bytes = [r#"{"type":"ToSet","id":0,"was_modified":true}"#, "\n"]
-            .concat()
-            .into();
+        let expected_resp_1: Bytes = [
+            r#"{"id":0,"outcome":{"type":"OfSet","was_modified":true}}"#,
+            "\n",
+        ]
+        .concat()
+        .into();
         assert_eq!(expected_resp_1, actual_resp_1);
 
         let actual_resp_1 = receiver.recv().await.unwrap();
-        let expected_resp_1: Bytes = [r#"{"type":"ToSet","id":1,"was_modified":false}"#, "\n"]
-            .concat()
-            .into();
+        let expected_resp_1: Bytes = [
+            r#"{"id":1,"outcome":{"type":"OfSet","was_modified":false}}"#,
+            "\n",
+        ]
+        .concat()
+        .into();
         assert_eq!(expected_resp_1, actual_resp_1);
     }
 
@@ -215,13 +244,16 @@ mod server_tests {
     async fn performs_set_and_get() {
         let (mut writer, mut receiver) = setup().await;
 
-        let get_req_0: Bytes = [r#"{"id":0,"type":"Get","key":"foo"}"#, "\n"]
+        let get_req_0: Bytes = [r#"{"id":0,"command":{"type":"Get","key":"foo"}}"#, "\n"]
             .concat()
             .into();
-        let set_req_1: Bytes = [r#"{"id":1,"type":"Set","key":"foo","value":"bar"}"#, "\n"]
-            .concat()
-            .into();
-        let get_req_2: Bytes = [r#"{"id":2,"type":"Get","key":"foo"}"#, "\n"]
+        let set_req_1: Bytes = [
+            r#"{"id":1,"command":{"type":"Set","key":"foo","value":"bar"}}"#,
+            "\n",
+        ]
+        .concat()
+        .into();
+        let get_req_2: Bytes = [r#"{"id":2,"command":{"type":"Get","key":"foo"}}"#, "\n"]
             .concat()
             .into();
 
@@ -232,19 +264,22 @@ mod server_tests {
         writer.write_all(&get_req_2).await.unwrap();
         writer.flush().await.unwrap();
 
-        let expected_resp_0: Bytes = [r#"{"type":"ToGet","id":0,"value":null}"#, "\n"]
+        let expected_resp_0: Bytes = [r#"{"id":0,"outcome":{"type":"OfGet","value":null}}"#, "\n"]
             .concat()
             .into();
         let actual_resp_0 = receiver.recv().await.unwrap();
         assert_eq!(expected_resp_0, actual_resp_0);
 
-        let expected_resp_1: Bytes = [r#"{"type":"ToSet","id":1,"was_modified":true}"#, "\n"]
-            .concat()
-            .into();
+        let expected_resp_1: Bytes = [
+            r#"{"id":1,"outcome":{"type":"OfSet","was_modified":true}}"#,
+            "\n",
+        ]
+        .concat()
+        .into();
         let actual_resp_1 = receiver.recv().await.unwrap();
         assert_eq!(expected_resp_1, actual_resp_1);
 
-        let expected_resp_2: Bytes = [r#"{"type":"ToGet","id":2,"value":"bar"}"#, "\n"]
+        let expected_resp_2: Bytes = [r#"{"id":2,"outcome":{"type":"OfGet","value":"bar"}}"#, "\n"]
             .concat()
             .into();
         let actual_resp_2 = receiver.recv().await.unwrap();
@@ -255,7 +290,7 @@ mod server_tests {
     async fn handles_invalid_request() {
         let (mut writer, mut receiver) = setup().await;
 
-        let req: Bytes = [r#"{"id":0,"type":"Set","key":"foo"}"#, "\n"]
+        let req: Bytes = [r#"{"id":0,"command":{"type":"Set","key":"foo"}}"#, "\n"]
             .concat()
             .into();
 
@@ -264,15 +299,11 @@ mod server_tests {
 
         let actual_resp = receiver.recv().await.unwrap();
         let expected_resp: Bytes = [
-            r#"{"type":"Error","req_hash":10867052927846470595,"msg":"missing field `value`"}"#,
+            r#"{"id":12459724080765958563,"outcome":{"type":"Error","msg":"missing field `value` at line 1 column 45"}}"#,
             "\n",
         ]
         .concat()
         .into();
         assert_eq!(expected_resp, actual_resp);
     }
-
-    #[tokio::test]
-    #[ignore = "TODO"]
-    async fn shuts_down_gracefully() {}
 }

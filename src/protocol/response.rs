@@ -1,13 +1,27 @@
+use crate::protocol::Hasher;
 use serde::{Deserialize, Serialize};
 use serde_json;
 
-#[derive(Clone, PartialEq, Debug, Deserialize, Serialize)]
+#[derive(Clone, Eq, PartialEq, Debug, Deserialize, Serialize, Hash)]
+#[serde(deny_unknown_fields)]
+pub struct Response {
+    pub id: u64,
+    pub outcome: Outcome,
+}
+
+#[derive(Clone, Eq, PartialEq, Debug, Deserialize, Serialize, Hash)]
 #[serde(tag = "type", deny_unknown_fields)]
-pub enum Response {
-    ToGet { id: u64, value: Option<String> },
-    ToSet { id: u64, was_modified: bool },
-    Error { req_hash: u64, msg: String },
+pub enum Outcome {
+    OfGet { value: Option<String> },
+    OfSet { was_modified: bool },
+    Error { msg: String },
     Invalid { msg: String },
+}
+
+impl Response {
+    pub(crate) fn id(&self) -> u64 {
+        self.id
+    }
 }
 
 impl Into<Vec<u8>> for Response {
@@ -18,7 +32,10 @@ impl Into<Vec<u8>> for Response {
 
 impl From<Vec<u8>> for Response {
     fn from(bs: Vec<u8>) -> Self {
-        serde_json::from_slice(&*bs).unwrap_or_else(|e| Response::Invalid { msg: e.to_string() })
+        serde_json::from_slice(&*bs).unwrap_or_else(|e| Response {
+            id: Hasher::hash(&bs),
+            outcome: Outcome::Invalid { msg: e.to_string() },
+        })
     }
 }
 
@@ -28,23 +45,27 @@ mod response_tests {
 
     #[test]
     fn deserializing_get_response() {
-        let input: Vec<u8> = r#"{"type":"ToGet","id":42,"value":"bar"}"#.into();
+        let input: Vec<u8> = r#"{"id":42,"outcome":{"type":"OfGet","value":"bar"}}"#.into();
 
         assert_eq!(
             Response::from(input),
-            Response::ToGet {
+            Response {
                 id: 42,
-                value: Some("bar".to_string()),
+                outcome: Outcome::OfGet {
+                    value: Some("bar".to_string()),
+                }
             }
         );
     }
 
     #[test]
     fn serializing_get_response() {
-        let expected: Vec<u8> = r#"{"type":"ToGet","id":42,"value":"bar"}"#.into();
-        let actual: Vec<u8> = Response::ToGet {
+        let expected: Vec<u8> = r#"{"id":42,"outcome":{"type":"OfGet","value":"bar"}}"#.into();
+        let actual: Vec<u8> = Response {
             id: 42,
-            value: Some("bar".to_string()),
+            outcome: Outcome::OfGet {
+                value: Some("bar".to_string()),
+            },
         }
         .into();
 
@@ -52,11 +73,25 @@ mod response_tests {
     }
 
     #[test]
+    fn deserializing_set_response() {
+        let input: Vec<u8> = r#"{"id":42,"outcome":{"type":"OfSet","was_modified":true}}"#.into();
+
+        assert_eq!(
+            Response::from(input),
+            Response {
+                id: 42,
+                outcome: Outcome::OfSet { was_modified: true },
+            }
+        );
+    }
+
+    #[test]
     fn serializing_set_response() {
-        let expected: Vec<u8> = r#"{"type":"ToSet","id":42,"was_modified":true}"#.into();
-        let actual: Vec<u8> = Response::ToSet {
+        let expected: Vec<u8> =
+            r#"{"id":42,"outcome":{"type":"OfSet","was_modified":true}}"#.into();
+        let actual: Vec<u8> = Response {
             id: 42,
-            was_modified: true,
+            outcome: Outcome::OfSet { was_modified: true },
         }
         .into();
         assert_eq!(expected, actual);
@@ -64,10 +99,12 @@ mod response_tests {
 
     #[test]
     fn serializing_error_response() {
-        let expected: Vec<u8> = r#"{"type":"Error","req_hash":42,"msg":"whoops!"}"#.into();
-        let actual: Vec<u8> = Response::Error {
-            req_hash: 42,
-            msg: "whoops!".to_string(),
+        let expected: Vec<u8> = r#"{"id":42,"outcome":{"type":"Error","msg":"whoops!"}}"#.into();
+        let actual: Vec<u8> = Response {
+            id: 42,
+            outcome: Outcome::Error {
+                msg: "whoops!".to_string(),
+            },
         }
         .into();
 

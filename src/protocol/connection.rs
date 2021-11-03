@@ -78,15 +78,22 @@ mod connection_tests {
     use crate::protocol::connection::ClientConnection;
 
     use super::*;
+    use crate::protocol::request::Command;
+    use crate::protocol::response::Outcome;
 
     #[tokio::test]
     async fn client_reads() {
-        let response_bytes: Vec<u8> = [r#"{"type":"ToGet","id":42,"value":"bar"}"#, "\n"]
-            .concat()
-            .into();
-        let response = Response::ToGet {
+        let response_bytes: Vec<u8> = [
+            r#"{"id":42,"outcome":{"type":"OfGet","value":"bar"}}"#,
+            "\n",
+        ]
+        .concat()
+        .into();
+        let response = Response {
             id: 42,
-            value: Some("bar".to_string()),
+            outcome: Outcome::OfGet {
+                value: Some("bar".to_string()),
+            },
         };
 
         let (connection, input_sender, _) = ClientConnection::with_channel();
@@ -97,11 +104,13 @@ mod connection_tests {
 
     #[tokio::test]
     async fn client_writes() {
-        let request = Request::Get {
+        let request = Request {
             id: 42,
-            key: "foo".to_string(),
+            command: Command::Get {
+                key: "foo".to_string(),
+            },
         };
-        let request_bytes: Vec<u8> = [r#"{"type":"Get","id":42,"key":"foo"}"#, "\n"]
+        let request_bytes: Vec<u8> = [r#"{"id":42,"command":{"type":"Get","key":"foo"}}"#, "\n"]
             .concat()
             .into();
 
@@ -113,11 +122,13 @@ mod connection_tests {
 
     #[tokio::test]
     async fn server_reads() {
-        let request = Request::Get {
+        let request = Request {
             id: 42,
-            key: "foo".to_string(),
+            command: Command::Get {
+                key: "foo".to_string(),
+            },
         };
-        let request_bytes: Vec<u8> = [r#"{"type":"Get","id":42,"key":"foo"}"#, "\n"]
+        let request_bytes: Vec<u8> = [r#"{"id":42,"command":{"type":"Get","key":"foo"}}"#, "\n"]
             .concat()
             .into();
 
@@ -129,13 +140,18 @@ mod connection_tests {
 
     #[tokio::test]
     async fn server_writes() {
-        let response = Response::ToGet {
+        let response = Response {
             id: 42,
-            value: Some("bar".to_string()),
+            outcome: Outcome::OfGet {
+                value: Some("bar".to_string()),
+            },
         };
-        let response_bytes: Vec<u8> = [r#"{"type":"ToGet","id":42,"value":"bar"}"#, "\n"]
-            .concat()
-            .into();
+        let response_bytes: Vec<u8> = [
+            r#"{"id":42,"outcome":{"type":"OfGet","value":"bar"}}"#,
+            "\n",
+        ]
+        .concat()
+        .into();
 
         let (connection, _, output_receiver) = ServerConnection::with_channel();
         let _ = connection.write(response).await;

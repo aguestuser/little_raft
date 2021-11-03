@@ -3,18 +3,32 @@ use serde::{Deserialize, Serialize};
 use serde_json;
 
 #[derive(Clone, PartialEq, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Request {
+    pub id: u64,
+    pub command: Command,
+}
+
+#[derive(Clone, PartialEq, Debug, Deserialize, Serialize)]
 #[serde(tag = "type", deny_unknown_fields)]
-pub enum Request {
-    Get { id: u64, key: String },
-    Set { id: u64, key: String, value: String },
-    Invalid { req_hash: u64, msg: String },
+pub enum Command {
+    Get { key: String },
+    Set { key: String, value: String },
+    Invalid { msg: String },
+}
+
+impl Request {
+    // TODO: get rid of this
+    pub fn id(&self) -> u64 {
+        self.id
+    }
 }
 
 impl From<Vec<u8>> for Request {
     fn from(bs: Vec<u8>) -> Request {
-        serde_json::from_slice(&bs).unwrap_or_else(|e| Request::Invalid {
-            req_hash: Hasher::hash(&bs),
-            msg: e.to_string(),
+        serde_json::from_slice(&bs).unwrap_or_else(|e| Request {
+            id: Hasher::hash(&bs),
+            command: Command::Invalid { msg: e.to_string() },
         })
     }
 }
@@ -28,26 +42,31 @@ impl Into<Vec<u8>> for Request {
 #[cfg(test)]
 mod request_tests {
     use super::*;
+    use crate::protocol::request::Command::Invalid;
 
     #[test]
     fn deserializing_get_request() {
-        let input: Vec<u8> = r#"{"type":"Get","id":42,"key":"foo"}"#.into();
+        let input: Vec<u8> = r#"{"id":42,"command":{"type":"Get","key":"foo"}}"#.into();
 
         assert_eq!(
             Request::from(input),
-            Request::Get {
+            Request {
                 id: 42,
-                key: "foo".to_string()
+                command: Command::Get {
+                    key: "foo".to_string(),
+                }
             }
         );
     }
 
     #[test]
     fn serializing_get_request() {
-        let expected: Vec<u8> = r#"{"type":"Get","id":42,"key":"foo"}"#.into();
-        let actual: Vec<u8> = Request::Get {
+        let expected: Vec<u8> = r#"{"id":42,"command":{"type":"Get","key":"foo"}}"#.into();
+        let actual: Vec<u8> = Request {
             id: 42,
-            key: "foo".to_string(),
+            command: Command::Get {
+                key: "foo".to_string(),
+            },
         }
         .into();
 
@@ -56,24 +75,30 @@ mod request_tests {
 
     #[test]
     fn deserializing_set_request() {
-        let input: Vec<u8> = r#" { "type":"Set", "id":42, "key":"foo", "value":"bar" }"#.into();
+        let input: Vec<u8> =
+            r#" {"id":42,"command":{"type":"Set","key":"foo","value":"bar"}}"#.into();
         assert_eq!(
             Request::from(input),
-            Request::Set {
+            Request {
                 id: 42,
-                key: "foo".to_string(),
-                value: "bar".to_string(),
+                command: Command::Set {
+                    key: "foo".to_string(),
+                    value: "bar".to_string(),
+                }
             }
         )
     }
 
     #[test]
     fn serializing_set_request() {
-        let expected: Vec<u8> = r#"{"type":"Set","id":42,"key":"foo","value":"bar"}"#.into();
-        let actual: Vec<u8> = Request::Set {
+        let expected: Vec<u8> =
+            r#"{"id":42,"command":{"type":"Set","key":"foo","value":"bar"}}"#.into();
+        let actual: Vec<u8> = Request {
             id: 42,
-            key: "foo".to_string(),
-            value: "bar".to_string(),
+            command: Command::Set {
+                key: "foo".to_string(),
+                value: "bar".to_string(),
+            },
         }
         .into();
 
@@ -86,9 +111,11 @@ mod request_tests {
 
         assert_eq!(
             Request::from(input.clone()),
-            Request::Invalid {
-                req_hash: Hasher::hash(&input),
-                msg: "expected ident at line 1 column 2".to_string(),
+            Request {
+                id: Hasher::hash(&input),
+                command: Invalid {
+                    msg: "expected ident at line 1 column 2".to_string(),
+                }
             },
         )
     }
