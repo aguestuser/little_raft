@@ -1,38 +1,39 @@
-
 # What lies here
 
-This is a playground for toy projects implementing distributed data stores in rust in different ways.
+This is a playground for a toy implementation of the Raft algorithm whose purpose is to help me have fun learning about the algorithm and about network programming in Rust.
 
 It is a work in progress that will assemble pieces over time sporadically as I get interested in new things and have time to play!
 
-Currently I am interested in implementing the various examples of approaches to replication outlined in Chapter 5 of Martin Kleppman's *Designing Data-Intensive Applications*. 
+As a learning project, it will often take long detours into implementing things from scratch that it would make no sense to implement from scratch in a real production environment! In general: it will seek to have good (perhaps even excessive!) test coverage, as testing in Rust is something I am also interested in learning about.
 
-# Current state
 
-- [x] 0: write a server that exposes a TCP + JSON interface (with `get` and `set` commands) to a simple key/value store (implemented as a thread-safe hash-map that can store strings as values)
-- [ ] 1: write a client for this server
-- [ ] 2: extend the server into a 6-server cluster (1 load balancer, 1 leader, 1 synchronous follower, 3 async followers)
-  - [ ] 2.0: routes all writes to a hard-coded leader
-  - [ ] 2.1: replicates writes to all followers and returns error to client if sync replication fails, else success
-  - [ ] 2.2: distributes reads across followers (by picking random follower on every request)
+# Progress
 
-# Up next:
-- handle adding new follower (leader takes snapshot, appends changes to log, follower updates from snapshot + logs)
-- elect new leader if leader fails
-- use some more interesting protocol than TCP + JSON?
-- persist leader store to disk with write-through semantics
-- use a more realistic "log"
-- ...
+- [x] 0. write a server that exposes a TCP + JSON interface (with `get` and `set` commands) to a simple key/value store (implemented as a thread-safe hash-map that can store strings as values)
+- [x] 1. write a client for this server
+- [ ] 2. implement naive (unsafe) replication
+  - [ ] app consistes of 5 node cluster w/ 1 leader, 4 followers. followers only have servers, leaders have server and client that can issue commands to all followers.
+  - [ ] followers respond to `set` command by writing to local hashmap, sending success message
+  - [ ] leaders respond to `set` sommand by issuing `set` command to followers. if majority respond with success, it writes k/v pair to hashmap, issues success to caller
+  - [x] NOTE: this is unsafe (and not very useful in establishing any meaningful kind of consensus). there is no way of enforcing an eventually consistent state between leaders and all followers or recovering from any node crashing. the point is simply to get the basic topolgy of multi-node communication in place!
+- [ ] 3. migrate protocol to protobuf rpc (using [tonic](https://github.com/hyperium/tonic)).
+  - [x] NOTE: we do this before implementing log replication in 4. b/c that implementation will cause the  surface area & complexity of of the RPC API to expand dramatically and we wish to migrate to our desired framework while it is still relatively small (and so we don't implement this API twice!)
+- [ ] 4. implement proper log replication (w/ commits to state machine)
+  - [ ] each node keeps an append-only log of `set` commands (implemented as a `Vec<Commmand::Set>` that serializes its elements and appends them to a file before appending them?) and an append-only log of commit indexes (to track which elements of the log have been committed)
+  - [ ] leaders issue `ApendEntry` RPC calls as specified in the Raft Paper (below)
+  - [x] NOTE: we descope leader election at this stage!
+ly want before doing so involves a large migration
+- [ ] 5. implement heartbeats
+- [ ] 6. implement leader election
+- [ ] 7. implement log compaction
+- [ ] 8. implement cluster expansion/contraction
 
-# Sources
+# Resources
+
+# on raft:
+- paper: https://raft.github.io/raft.pdf
+- slide deck: http://thesecretlivesofdata.com/raft/
+- demo & resources: https://raft.github.io/
 
 # on distributed systems
 - [Designing Data Intensive Applications](https://github.com/Yang-Yanxiang/Designing-Data-Intensive-Applications/blob/master/Designing%20Data%20Intensive%20Applications.pdf)
-
-# on raft:
-- https://raft.github.io/
-- http://thesecretlivesofdata.com/raft/
-
-# on paxos:
-- https://people.cs.rutgers.edu/~pxk/417/notes/paxos.html
-- https://www.microsoft.com/en-us/research/publication/paxos-made-simple/

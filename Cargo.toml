@@ -1,10 +1,10 @@
 [package]
-name = "stors"
+name = "litte_raft"
 version = "0.1.0"
 edition = "2018"
 
 [lib]
-name = "stors"
+name = "little_raft"
 path = "src/lib.rs"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
