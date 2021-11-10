@@ -19,6 +19,24 @@ pub enum Outcome {
 }
 
 impl Response {
+    pub fn error_of(id: u64, msg: String) -> Response {
+        Response {
+            id,
+            outcome: Outcome::Error { msg },
+        }
+    }
+    pub fn of_get(id: u64, value: Option<String>) -> Response {
+        Response {
+            id,
+            outcome: { Outcome::OfGet { value } },
+        }
+    }
+    pub fn of_set(id: u64, was_modified: bool) -> Response {
+        Response {
+            id,
+            outcome: { Outcome::OfSet { was_modified } },
+        }
+    }
     pub(crate) fn id(&self) -> u64 {
         self.id
     }

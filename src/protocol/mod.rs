@@ -5,6 +5,7 @@ pub mod response;
 pub mod server;
 
 pub const NEWLINE: u8 = '\n' as u8;
+pub const REQUEST_BUFFER_SIZE: usize = 16;
 
 pub struct Hasher {}
 

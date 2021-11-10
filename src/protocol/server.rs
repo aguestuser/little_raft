@@ -2,58 +2,60 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::oneshot::Sender as OneShotSender;
+use tokio::sync::{mpsc, oneshot, Mutex};
 
-use crate::node::State;
+use crate::error::Result;
 use crate::protocol::connection::ServerConnection;
-use crate::protocol::request::Command::{Get, Invalid, Set};
 use crate::protocol::request::Request;
-use crate::protocol::response::{Outcome, Response};
-use crate::store::Store;
+use crate::protocol::response::Response;
+use crate::protocol::REQUEST_BUFFER_SIZE;
 
 pub struct Server {
-    pub address: SocketAddr,
-    pub state: State,
-    pub store: Option<Arc<Store>>,
-    pub tcp_listener: Option<Arc<TcpListener>>,
+    address: SocketAddr,
+    tcp_listener: Option<Arc<TcpListener>>,
+    request_sender: Sender<(Request, Responder)>,
+    pub request_receiver: Arc<Mutex<Receiver<(Request, Responder)>>>,
 }
 
+#[derive(Clone)]
+pub struct ServerConfig {
+    pub address: SocketAddr,
+}
+
+type Responder = OneShotSender<Response>;
+
 impl Server {
-    pub fn new(address: SocketAddr) -> Server {
+    pub fn new(cfg: ServerConfig) -> Server {
+        let (request_sender, request_receiver) =
+            mpsc::channel::<(Request, Responder)>(REQUEST_BUFFER_SIZE);
         Self {
-            address,
-            state: State::New,
-            store: Option::None,
+            address: cfg.address,
             tcp_listener: Option::None,
+            request_sender,
+            request_receiver: Arc::new(Mutex::new(request_receiver)),
         }
     }
 
-    pub async fn run(self) -> Server {
-        //JoinHandle<()> {
-        let store_arc = Arc::new(Store::new());
-        let store = store_arc.clone();
-        println!("> Created store");
-
+    pub async fn run(&mut self) -> Result<()> {
         let tcp_listener_arc = Arc::new(TcpListener::bind(&self.address).await.unwrap());
         let tcp_listener = tcp_listener_arc.clone();
+        self.tcp_listener = Some(tcp_listener_arc);
         println!("> Listening on {:?}", &self.address);
 
+        let request_sender = self.request_sender.clone();
         tokio::spawn(async move {
             // TODO: use select here to insert kill switch for shutdown
             loop {
                 let (socket, client_addr) = tcp_listener.accept().await.unwrap();
                 println!("> Got connection on {}", &client_addr);
-
-                let store = store.clone();
-                tokio::spawn(async move { Server::handle_requests(socket, store).await });
+                let request_sender = request_sender.clone();
+                tokio::spawn(async move { Server::handle_messages(socket, request_sender).await });
             }
         });
 
-        Server {
-            address: self.address,
-            state: State::Running,
-            store: Some(store_arc),
-            tcp_listener: Some(tcp_listener_arc),
-        }
+        Ok(())
     }
 
     // async fn stop(&self) {
@@ -65,53 +67,46 @@ impl Server {
     //}
 
     /// Process data from a socket connection
-    async fn handle_requests(socket: TcpStream, store: Arc<Store>) {
-        let connection = ServerConnection::new(socket);
+    async fn handle_messages(
+        socket: TcpStream,
+        request_tx: Sender<(Request, OneShotSender<Response>)>,
+    ) {
+        let connection = Arc::new(ServerConnection::new(socket));
 
-        loop {
-            match connection.read().await {
-                Ok(Request { id, command }) => {
-                    let response: Response = match command {
-                        Get { key } => {
-                            let value = store.get(&key).await;
-                            Response {
-                                id,
-                                outcome: Outcome::OfGet { value },
-                            }
-                        }
-                        Set { key, value } => {
-                            let was_modified = store.set(&key, &value).await;
-                            Response {
-                                id,
-                                outcome: Outcome::OfSet { was_modified },
-                            }
-                        }
-                        Invalid { msg } => Response {
-                            id,
-                            outcome: Outcome::Error { msg },
-                        },
-                    };
-                    let _ = connection.write(response.into()).await.map_err(|e| {
-                        eprintln!("ERROR writing response: {}", e.to_string());
-                    });
+        tokio::spawn(async move {
+            loop {
+                let (response_tx, response_rx) = oneshot::channel::<Response>();
+
+                match connection.read().await {
+                    Ok(req) => {
+                        println!("req: {:?}", req);
+                        let _ = request_tx.send((req, response_tx)).await;
+                    }
+                    Err(e) => {
+                        println!("err");
+                        // TODO: bubble up?
+                        eprintln!("ERROR reading request: {}", e.to_string());
+                    }
                 }
-                Err(e) => {
-                    // TODO: bubble up and re-establish connection? report error to client__?
-                    eprintln!("ERROR reading request: {}", e.to_string());
-                }
+
+                let write_connection = connection.clone();
+                tokio::spawn(async move {
+                    // TODO: insert timeout here
+                    if let Ok(response) = response_rx.await {
+                        let _ = write_connection.write(response).await;
+                    }
+                });
             }
-        }
+        });
     }
 }
 
 #[cfg(test)]
 mod server_tests {
-    use bytes::Bytes;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
-    use tokio::net::tcp::OwnedWriteHalf;
-    use tokio::sync::mpsc;
-    use tokio::sync::mpsc::Receiver;
+    use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 
+    use crate::protocol::NEWLINE;
     use crate::test_support::gen::Gen;
 
     use super::*;
@@ -120,190 +115,83 @@ mod server_tests {
         static ref BUF_SIZE: usize = 10;
     }
 
-    async fn setup() -> (BufWriter<OwnedWriteHalf>, Receiver<Bytes>) {
-        let addr = Gen::socket_addr();
-        // TODO: return this when testing Server#stop()
-        let _ = Server::new(addr).run().await;
+    struct Runner {
+        server: Server,
+        client_reader: BufReader<OwnedReadHalf>,
+        client_writer: BufWriter<OwnedWriteHalf>,
+    }
 
-        let (mut client_reader, client_writer) =
-            match TcpStream::connect(addr).await.unwrap().into_split() {
+    async fn setup() -> Runner {
+        let address = Gen::socket_addr();
+        // TODO: return this when testing Server#stop()
+        let mut server = Server::new(ServerConfig { address });
+        let _ = server.run().await;
+
+        let (client_reader, client_writer) =
+            match TcpStream::connect(address).await.unwrap().into_split() {
                 (r, w) => (BufReader::new(r), BufWriter::new(w)),
             };
 
-        let (sx, rx) = mpsc::channel::<Bytes>(*BUF_SIZE);
-        tokio::spawn(async move {
-            loop {
-                let mut buf: Vec<u8> = Vec::new();
-                let _ = client_reader.read_until(b"\n"[0], &mut buf).await.unwrap();
-                sx.send(buf.into()).await.unwrap();
-            }
-        });
-
-        (client_writer, rx)
+        Runner {
+            server,
+            client_reader,
+            client_writer,
+        }
     }
 
     #[tokio::test]
     async fn constructs_server_struct() {
-        let addr = Gen::socket_addr();
-        let server = Server::new(addr);
-        assert_eq!(server.address, addr);
-        assert_eq!(server.state, State::New);
-        assert!(server.store.is_none());
+        let config = Gen::server_config();
+        let server = Server::new(config.clone());
+        assert_eq!(server.address, config.address);
         assert!(server.tcp_listener.is_none());
     }
 
     #[tokio::test]
-    async fn updates_state_on_run() {
-        let server = Server::new(Gen::socket_addr()).run().await;
-        assert_eq!(server.state, State::Running);
-    }
+    async fn listens_for_requests_from_client_and_puts_them_on_channel() {
+        let Runner {
+            server,
+            mut client_writer,
+            ..
+        } = setup().await;
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn performs_get() {
-        let (mut writer, mut receiver) = setup().await;
+        let request_bytes: Vec<u8> = Gen::request().into();
+        let client_write = [request_bytes.clone().as_slice(), b"\n"].concat();
 
-        let request: Bytes = [r#"{"id":0,"command":{"type":"Get","key":"foo"}}"#, "\n"]
-            .concat()
-            .into();
-        writer.write_all(&request).await.unwrap();
-        writer.flush().await.unwrap();
+        client_writer.write_all(&*client_write).await.unwrap();
+        client_writer.flush().await.unwrap();
 
-        let expected_response: Bytes =
-            [r#"{"id":0,"outcome":{"type":"OfGet","value":null}}"#, "\n"]
-                .concat()
-                .into();
-        let actual_response = receiver.recv().await.unwrap();
-        assert_eq!(expected_response, actual_response);
+        let expected_request: Request = request_bytes.into();
+        let (actual_request, _) = server.request_receiver.lock().await.recv().await.unwrap();
+        assert_eq!(expected_request, actual_request);
     }
 
     #[tokio::test]
-    async fn performs_set() {
-        let (mut writer, mut receiver) = setup().await;
+    async fn listens_for_responses_on_channel_and_writes_them_to_client() {
+        let Runner {
+            server,
+            mut client_reader,
+            mut client_writer,
+        } = setup().await;
 
-        let request: Bytes = [
-            r#"{"id":0,"command":{"type":"Set","key":"foo","value":"bar"}}"#,
-            "\n",
-        ]
-        .concat()
-        .into();
-        writer.write_all(&request).await.unwrap();
-        writer.flush().await.unwrap();
+        let request_bytes: Vec<u8> = Gen::request().into();
+        let client_write = [request_bytes.clone().as_slice(), b"\n"].concat();
 
-        let expected_response: Bytes = [
-            r#"{"id":0,"outcome":{"type":"OfSet","was_modified":true}}"#,
-            "\n",
-        ]
-        .concat()
-        .into();
-        let actual_response = receiver.recv().await.unwrap();
-        assert_eq!(expected_response, actual_response);
-    }
+        client_writer.write_all(&*client_write).await.unwrap();
+        client_writer.flush().await.unwrap();
 
-    #[tokio::test]
-    async fn performs_set_idempotently() {
-        let (mut writer, mut receiver) = setup().await;
+        let response = Gen::response();
+        let response_bytes: Vec<u8> = response.clone().into();
+        let (_, responder) = server.request_receiver.lock().await.recv().await.unwrap();
+        let _ = responder.send(response).unwrap();
 
-        let req_0: Bytes = [
-            r#"{"id":0,"command":{"type":"Set","key":"foo","value":"bar"}}"#,
-            "\n",
-        ]
-        .concat()
-        .into();
-        let req_1: Bytes = [
-            r#"{"id":1,"command":{"type":"Set","key":"foo","value":"bar"}}"#,
-            "\n",
-        ]
-        .concat()
-        .into();
+        let expected_client_read = [response_bytes, vec![NEWLINE]].concat();
+        let mut actual_client_read = Vec::<u8>::new();
+        let _ = client_reader
+            .read_until(NEWLINE, &mut actual_client_read)
+            .await
+            .unwrap();
 
-        writer.write_all(&req_0).await.unwrap();
-        writer.flush().await.unwrap();
-        writer.write_all(&req_1).await.unwrap();
-        writer.flush().await.unwrap();
-
-        let actual_resp_1 = receiver.recv().await.unwrap();
-        let expected_resp_1: Bytes = [
-            r#"{"id":0,"outcome":{"type":"OfSet","was_modified":true}}"#,
-            "\n",
-        ]
-        .concat()
-        .into();
-        assert_eq!(expected_resp_1, actual_resp_1);
-
-        let actual_resp_1 = receiver.recv().await.unwrap();
-        let expected_resp_1: Bytes = [
-            r#"{"id":1,"outcome":{"type":"OfSet","was_modified":false}}"#,
-            "\n",
-        ]
-        .concat()
-        .into();
-        assert_eq!(expected_resp_1, actual_resp_1);
-    }
-
-    #[tokio::test]
-    async fn performs_set_and_get() {
-        let (mut writer, mut receiver) = setup().await;
-
-        let get_req_0: Bytes = [r#"{"id":0,"command":{"type":"Get","key":"foo"}}"#, "\n"]
-            .concat()
-            .into();
-        let set_req_1: Bytes = [
-            r#"{"id":1,"command":{"type":"Set","key":"foo","value":"bar"}}"#,
-            "\n",
-        ]
-        .concat()
-        .into();
-        let get_req_2: Bytes = [r#"{"id":2,"command":{"type":"Get","key":"foo"}}"#, "\n"]
-            .concat()
-            .into();
-
-        writer.write_all(&get_req_0).await.unwrap();
-        writer.flush().await.unwrap();
-        writer.write_all(&set_req_1).await.unwrap();
-        writer.flush().await.unwrap();
-        writer.write_all(&get_req_2).await.unwrap();
-        writer.flush().await.unwrap();
-
-        let expected_resp_0: Bytes = [r#"{"id":0,"outcome":{"type":"OfGet","value":null}}"#, "\n"]
-            .concat()
-            .into();
-        let actual_resp_0 = receiver.recv().await.unwrap();
-        assert_eq!(expected_resp_0, actual_resp_0);
-
-        let expected_resp_1: Bytes = [
-            r#"{"id":1,"outcome":{"type":"OfSet","was_modified":true}}"#,
-            "\n",
-        ]
-        .concat()
-        .into();
-        let actual_resp_1 = receiver.recv().await.unwrap();
-        assert_eq!(expected_resp_1, actual_resp_1);
-
-        let expected_resp_2: Bytes = [r#"{"id":2,"outcome":{"type":"OfGet","value":"bar"}}"#, "\n"]
-            .concat()
-            .into();
-        let actual_resp_2 = receiver.recv().await.unwrap();
-        assert_eq!(expected_resp_2, actual_resp_2);
-    }
-
-    #[tokio::test]
-    async fn handles_invalid_request() {
-        let (mut writer, mut receiver) = setup().await;
-
-        let req: Bytes = [r#"{"id":0,"command":{"type":"Set","key":"foo"}}"#, "\n"]
-            .concat()
-            .into();
-
-        writer.write_all(&req).await.unwrap();
-        writer.flush().await.unwrap();
-
-        let actual_resp = receiver.recv().await.unwrap();
-        let expected_resp: Bytes = [
-            r#"{"id":12459724080765958563,"outcome":{"type":"Error","msg":"missing field `value` at line 1 column 45"}}"#,
-            "\n",
-        ]
-        .concat()
-        .into();
-        assert_eq!(expected_resp, actual_resp);
+        assert_eq!(expected_client_read, actual_client_read);
     }
 }

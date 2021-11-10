@@ -19,10 +19,22 @@ pub enum NetworkError {
     PeerConnectionClosed,
     #[error(display = "request timed out")]
     RequestTimeout,
+    #[error(display = "broadcast failed to receive successful response from majority of peers")]
+    BroadcastFailure,
+    #[error(display = "parallel requests failed to join")]
+    TaskJoinFailure,
+}
+
+#[derive(Debug, Error)]
+pub enum PermissionError {
+    #[error(display = "followers are not permitted to issue Get commands")]
+    FollowersMayNotGet,
 }
 
 #[derive(Debug, Error)]
 pub enum PersistenceError {
-    #[error(display = "failed to insert value into map")]
-    MapWriteFailure,
+    #[error(display = "failed to insert value into store")]
+    InsertionError,
+    #[error(display = "failed to retrieve value from store")]
+    RetrievalError,
 }

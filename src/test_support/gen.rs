@@ -1,6 +1,8 @@
 #![allow(dead_code)]
-use crate::protocol::request::Command;
+use crate::protocol::client::ClientConfig;
+use crate::protocol::request::{Command, Request};
 use crate::protocol::response::{Outcome, Response};
+use crate::protocol::server::ServerConfig;
 use rand::seq::SliceRandom;
 use rand::Rng;
 use std::net::SocketAddr;
@@ -11,6 +13,11 @@ impl Gen {
     pub fn u64() -> u64 {
         let mut rng = rand::thread_rng();
         rng.gen::<u64>()
+    }
+
+    pub fn usize() -> usize {
+        let mut rng = rand::thread_rng();
+        rng.gen::<usize>()
     }
 
     pub fn str() -> String {
@@ -34,6 +41,24 @@ impl Gen {
     pub fn socket_addr() -> SocketAddr {
         let port = port_scanner::request_open_port().unwrap();
         SocketAddr::from(([127, 0, 0, 1], port))
+    }
+
+    pub fn request() -> Request {
+        Request {
+            id: Gen::u64(),
+            command: Gen::command(),
+        }
+    }
+
+    pub fn command() -> Command {
+        let commands = vec![
+            Command::Get { key: Gen::str() },
+            Command::Set {
+                key: Gen::str(),
+                value: Gen::str(),
+            },
+        ];
+        commands.choose(&mut rand::thread_rng()).unwrap().clone()
     }
 
     pub fn response() -> Response {
@@ -67,6 +92,18 @@ impl Gen {
                 was_modified: Gen::bool(),
             },
             _ => Outcome::Error { msg: Gen::str() },
+        }
+    }
+
+    pub fn server_config() -> ServerConfig {
+        ServerConfig {
+            address: Gen::socket_addr(),
+        }
+    }
+
+    pub fn client_config() -> ClientConfig {
+        ClientConfig {
+            peer_addresses: vec![Gen::socket_addr(), Gen::socket_addr(), Gen::socket_addr()],
         }
     }
 }

@@ -2,14 +2,14 @@ use crate::protocol::Hasher;
 use serde::{Deserialize, Serialize};
 use serde_json;
 
-#[derive(Clone, PartialEq, Debug, Deserialize, Serialize)]
+#[derive(Clone, Eq, PartialEq, Debug, Deserialize, Serialize, Hash)]
 #[serde(deny_unknown_fields)]
 pub struct Request {
     pub id: u64,
     pub command: Command,
 }
 
-#[derive(Clone, PartialEq, Debug, Deserialize, Serialize)]
+#[derive(Clone, Eq, PartialEq, Debug, Deserialize, Serialize, Hash)]
 #[serde(tag = "type", deny_unknown_fields)]
 pub enum Command {
     Get { key: String },
