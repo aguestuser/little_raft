@@ -53,7 +53,7 @@ impl Gen {
     pub fn command() -> Command {
         let commands = vec![
             Command::Get { key: Gen::str() },
-            Command::Set {
+            Command::Put {
                 key: Gen::str(),
                 value: Gen::str(),
             },
@@ -75,7 +75,7 @@ impl Gen {
             Outcome::OfGet {
                 value: Some(Gen::str()),
             },
-            Outcome::OfSet {
+            Outcome::OfPut {
                 was_modified: Gen::bool(),
             },
             Outcome::Error { msg: Gen::str() },
@@ -88,7 +88,7 @@ impl Gen {
             Command::Get { .. } => Outcome::OfGet {
                 value: Some(Gen::str()),
             },
-            Command::Set { .. } => Outcome::OfSet {
+            Command::Put { .. } => Outcome::OfPut {
                 was_modified: Gen::bool(),
             },
             _ => Outcome::Error { msg: Gen::str() },

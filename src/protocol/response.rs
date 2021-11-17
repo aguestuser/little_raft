@@ -13,7 +13,7 @@ pub struct Response {
 #[serde(tag = "type", deny_unknown_fields)]
 pub enum Outcome {
     OfGet { value: Option<String> },
-    OfSet { was_modified: bool },
+    OfPut { was_modified: bool },
     Error { msg: String },
     Invalid { msg: String },
 }
@@ -34,7 +34,7 @@ impl Response {
     pub fn of_set(id: u64, was_modified: bool) -> Response {
         Response {
             id,
-            outcome: { Outcome::OfSet { was_modified } },
+            outcome: { Outcome::OfPut { was_modified } },
         }
     }
     pub(crate) fn id(&self) -> u64 {
@@ -91,25 +91,25 @@ mod response_tests {
     }
 
     #[test]
-    fn deserializing_set_response() {
-        let input: Vec<u8> = r#"{"id":42,"outcome":{"type":"OfSet","was_modified":true}}"#.into();
+    fn deserializing_put_response() {
+        let input: Vec<u8> = r#"{"id":42,"outcome":{"type":"OfPut","was_modified":true}}"#.into();
 
         assert_eq!(
             Response::from(input),
             Response {
                 id: 42,
-                outcome: Outcome::OfSet { was_modified: true },
+                outcome: Outcome::OfPut { was_modified: true },
             }
         );
     }
 
     #[test]
-    fn serializing_set_response() {
+    fn serializing_put_response() {
         let expected: Vec<u8> =
-            r#"{"id":42,"outcome":{"type":"OfSet","was_modified":true}}"#.into();
+            r#"{"id":42,"outcome":{"type":"OfPut","was_modified":true}}"#.into();
         let actual: Vec<u8> = Response {
             id: 42,
-            outcome: Outcome::OfSet { was_modified: true },
+            outcome: Outcome::OfPut { was_modified: true },
         }
         .into();
         assert_eq!(expected, actual);

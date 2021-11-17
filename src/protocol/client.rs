@@ -249,7 +249,7 @@ mod test_client {
         static ref GET_CMD: Command = Command::Get {
             key: "foo".to_string()
         };
-        static ref SET_CMD: Command = Command::Set {
+        static ref PUT_CMD: Command = Command::Put {
             key: "foo".to_string(),
             value: "bar".to_string(),
         };

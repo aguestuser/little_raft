@@ -1,6 +1,6 @@
 use crate::error::{PermissionError, Result};
 use crate::protocol::client::{Client, ClientConfig};
-use crate::protocol::request::Command::{Get, Invalid, Set};
+use crate::protocol::request::Command::{Get, Invalid, Put};
 use crate::protocol::request::Request;
 use crate::protocol::response::{Outcome, Response};
 use crate::protocol::server::{Server, ServerConfig};
@@ -62,7 +62,7 @@ impl Node {
 
                 let response: Response = match command {
                     Get { key } => Node::handle_get(role, store, id, key).await,
-                    Set { key, value } => {
+                    Put { key, value } => {
                         Node::handle_set(role, store, a_client, id, key, value).await
                     }
                     Invalid { msg } => Response::error_of(id, msg),
@@ -98,21 +98,21 @@ impl Node {
         // TODO: avoid this branching by extracting `LeaderNode` and `FollowerNode` impls
         match role.as_ref() {
             Role::Follower => {
-                let was_modified = store.set(&key, &value).await;
+                let was_modified = store.put(&key, &value).await;
                 Response::of_set(id, was_modified)
             }
             Role::Leader => {
-                let command = Set {
+                let command = Put {
                     key: key.clone(),
                     value: value.clone(),
                 };
                 let filter = |r: Response| match r.outcome {
-                    Outcome::OfSet { .. } => Some(r),
+                    Outcome::OfPut { .. } => Some(r),
                     _ => None,
                 };
                 match client.broadcast_and_filter(command, filter).await {
                     Ok(_) => {
-                        let was_modified = store.set(&key, &value).await;
+                        let was_modified = store.put(&key, &value).await;
                         Response::of_set(id, was_modified.clone())
                     }
                     Err(e) => Response::error_of(id, e.to_string()),
@@ -139,11 +139,11 @@ mod test_node {
         static ref GET_CMD: Command = Command::Get {
             key: "foo".to_string(),
         };
-        static ref SET_CMD: Command = Command::Set {
+        static ref PUT_CMD: Command = Command::Put {
             key: "foo".to_string(),
             value: "bar".to_string(),
         };
-        static ref SET_OUTCOME: Outcome = Outcome::OfSet { was_modified: true };
+        static ref PUT_OUTCOME: Outcome = Outcome::OfPut { was_modified: true };
         static ref ERROR_OUTCOME: Outcome = Outcome::Error {
             msg: "oh noes!".to_string()
         };
@@ -219,7 +219,7 @@ mod test_node {
 
     #[tokio::test]
     async fn leader_handles_successfully_replicated_put() {
-        let outcomes = std::iter::repeat(SET_OUTCOME.clone())
+        let outcomes = std::iter::repeat(PUT_OUTCOME.clone())
             .take(*NUM_PEERS)
             .collect::<Vec<Outcome>>();
         let Runner {
@@ -228,9 +228,9 @@ mod test_node {
             ..
         } = setup_with(Role::Leader, outcomes).await;
 
-        let response = client.write_one(&node_address, &SET_CMD).await.unwrap();
+        let response = client.write_one(&node_address, &PUT_CMD).await.unwrap();
 
-        assert_eq!(response.outcome, Outcome::OfSet { was_modified: true });
+        assert_eq!(response.outcome, Outcome::OfPut { was_modified: true });
     }
 
     #[tokio::test]
@@ -244,11 +244,11 @@ mod test_node {
             ..
         } = setup_with(Role::Leader, outcomes).await;
 
-        let set_response = client.write_one(&node_address, &SET_CMD).await.unwrap();
+        let put_response = client.write_one(&node_address, &PUT_CMD).await.unwrap();
         let get_response = client.write_one(&node_address, &GET_CMD).await.unwrap();
 
         assert_eq!(
-            set_response.outcome,
+            put_response.outcome,
             Outcome::Error {
                 msg: BroadcastFailure.to_string()
             }
@@ -264,7 +264,7 @@ mod test_node {
             ..
         } = setup_with(Role::Leader, vec![]).await;
 
-        let response = client.write_one(&node_address, &SET_CMD).await.unwrap();
+        let response = client.write_one(&node_address, &PUT_CMD).await.unwrap();
 
         assert_eq!(
             response.outcome,
@@ -276,10 +276,10 @@ mod test_node {
 
     #[tokio::test]
     async fn leader_handles_get_of_put_value() {
-        let outcomes = std::iter::repeat(SET_OUTCOME.clone())
+        let outcomes = std::iter::repeat(PUT_OUTCOME.clone())
             .take(*NUM_PEERS)
             .collect::<Vec<Outcome>>();
-        let set_command = Command::Set {
+        let put_command = Command::Put {
             key: "foo".to_string(),
             value: "bar".to_string(),
         };
@@ -292,7 +292,7 @@ mod test_node {
             ..
         } = setup_with(Role::Leader, outcomes).await;
 
-        let _ = client.write_one(&node_address, &set_command).await.unwrap();
+        let _ = client.write_one(&node_address, &put_command).await.unwrap();
         let get_response = client.write_one(&node_address, &get_command).await.unwrap();
         assert_eq!(
             get_response.outcome,
@@ -304,10 +304,10 @@ mod test_node {
 
     #[tokio::test]
     async fn leader_handles_idempotent_puts() {
-        let outcomes = std::iter::repeat(SET_OUTCOME.clone())
+        let outcomes = std::iter::repeat(PUT_OUTCOME.clone())
             .take(*NUM_PEERS)
             .collect::<Vec<Outcome>>();
-        let set_command = Command::Set {
+        let put_command = Command::Put {
             key: "foo".to_string(),
             value: "bar".to_string(),
         };
@@ -317,16 +317,16 @@ mod test_node {
             ..
         } = setup_with(Role::Leader, outcomes).await;
 
-        let set_response_1 = client.write_one(&node_address, &set_command).await.unwrap();
-        let set_response_2 = client.write_one(&node_address, &set_command).await.unwrap();
+        let put_response_1 = client.write_one(&node_address, &put_command).await.unwrap();
+        let put_response_2 = client.write_one(&node_address, &put_command).await.unwrap();
 
         assert_eq!(
-            set_response_1.outcome,
-            Outcome::OfSet { was_modified: true }
+            put_response_1.outcome,
+            Outcome::OfPut { was_modified: true }
         );
         assert_eq!(
-            set_response_2.outcome,
-            Outcome::OfSet {
+            put_response_2.outcome,
+            Outcome::OfPut {
                 was_modified: false
             }
         );
@@ -334,14 +334,14 @@ mod test_node {
 
     #[tokio::test]
     async fn leader_handles_sequential_puts() {
-        let outcomes = std::iter::repeat(SET_OUTCOME.clone())
+        let outcomes = std::iter::repeat(PUT_OUTCOME.clone())
             .take(*NUM_PEERS)
             .collect::<Vec<Outcome>>();
-        let set_command_1 = Command::Set {
+        let put_command_1 = Command::Put {
             key: "foo".to_string(),
             value: "bar".to_string(),
         };
-        let set_command_2 = Command::Set {
+        let put_command_2 = Command::Put {
             key: "foo".to_string(),
             value: "baz".to_string(),
         };
@@ -355,23 +355,23 @@ mod test_node {
             ..
         } = setup_with(Role::Leader, outcomes).await;
 
-        let set_response_1 = client
-            .write_one(&node_address, &set_command_1)
+        let put_response_1 = client
+            .write_one(&node_address, &put_command_1)
             .await
             .unwrap();
-        let set_response_2 = client
-            .write_one(&node_address, &set_command_2)
+        let put_response_2 = client
+            .write_one(&node_address, &put_command_2)
             .await
             .unwrap();
         let get_response = client.write_one(&node_address, &get_command).await.unwrap();
 
         assert_eq!(
-            set_response_1.outcome,
-            Outcome::OfSet { was_modified: true }
+            put_response_1.outcome,
+            Outcome::OfPut { was_modified: true }
         );
         assert_eq!(
-            set_response_2.outcome,
-            Outcome::OfSet { was_modified: true }
+            put_response_2.outcome,
+            Outcome::OfPut { was_modified: true }
         );
         assert_eq!(
             get_response.outcome,
@@ -406,7 +406,7 @@ mod test_node {
             ..
         } = setup_with(Role::Follower, vec![]).await;
 
-        let set_response = client.write_one(&node_address, &SET_CMD).await.unwrap();
-        assert_eq!(set_response.outcome, Outcome::OfSet { was_modified: true });
+        let put_response = client.write_one(&node_address, &PUT_CMD).await.unwrap();
+        assert_eq!(put_response.outcome, Outcome::OfPut { was_modified: true });
     }
 }

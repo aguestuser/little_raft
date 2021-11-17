@@ -13,7 +13,7 @@ pub struct Request {
 #[serde(tag = "type", deny_unknown_fields)]
 pub enum Command {
     Get { key: String },
-    Set { key: String, value: String },
+    Put { key: String, value: String },
     Invalid { msg: String },
 }
 
@@ -74,14 +74,14 @@ mod request_tests {
     }
 
     #[test]
-    fn deserializing_set_request() {
+    fn deserializing_put_request() {
         let input: Vec<u8> =
-            r#" {"id":42,"command":{"type":"Set","key":"foo","value":"bar"}}"#.into();
+            r#" {"id":42,"command":{"type":"Put","key":"foo","value":"bar"}}"#.into();
         assert_eq!(
             Request::from(input),
             Request {
                 id: 42,
-                command: Command::Set {
+                command: Command::Put {
                     key: "foo".to_string(),
                     value: "bar".to_string(),
                 }
@@ -90,12 +90,12 @@ mod request_tests {
     }
 
     #[test]
-    fn serializing_set_request() {
+    fn serializing_put_request() {
         let expected: Vec<u8> =
-            r#"{"id":42,"command":{"type":"Set","key":"foo","value":"bar"}}"#.into();
+            r#"{"id":42,"command":{"type":"Put","key":"foo","value":"bar"}}"#.into();
         let actual: Vec<u8> = Request {
             id: 42,
-            command: Command::Set {
+            command: Command::Put {
                 key: "foo".to_string(),
                 value: "bar".to_string(),
             },

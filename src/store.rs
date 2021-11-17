@@ -12,7 +12,7 @@ impl Store {
     }
 
     /// Sets `key` to a `value`, returns `true` if `value` changed, `false` if not
-    pub async fn set(&self, key: &str, value: &str) -> bool {
+    pub async fn put(&self, key: &str, value: &str) -> bool {
         match self.db.insert(key.to_string(), value.to_string()) {
             Some(v) => v != value,
             None => true,
@@ -30,9 +30,9 @@ mod store_tests {
     use super::*;
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn set_a_value() {
+    async fn put_a_value() {
         let store = Store::new();
-        let was_modified = store.set("foo", "bar").await;
+        let was_modified = store.put("foo", "bar").await;
 
         assert_eq!(was_modified, true);
         assert_eq!(&store.db.get("foo").unwrap()[..], "bar");
@@ -41,7 +41,7 @@ mod store_tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn get_an_existing_value() {
         let store = Store::new();
-        let _ = store.set("foo", "bar").await;
+        let _ = store.put("foo", "bar").await;
 
         assert_eq!(store.get("foo").await, Some("bar".to_string()));
     }
@@ -49,19 +49,19 @@ mod store_tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn get_a_non_existing_value() {
         let store = Store::new();
-        let _ = store.set("foo", "bar").await;
+        let _ = store.put("foo", "bar").await;
 
         assert_eq!(store.get("not here").await, None);
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn reset_a_value() {
+    async fn reput_a_value() {
         let store = Store::new();
 
-        let was_modified_1 = store.set("foo", "bar").await;
+        let was_modified_1 = store.put("foo", "bar").await;
         let res1 = store.get("foo").await.unwrap();
 
-        let was_modified_2 = store.set("foo", "baz").await;
+        let was_modified_2 = store.put("foo", "baz").await;
         let res2 = store.get("foo").await.unwrap();
 
         assert_eq!(was_modified_1, true);
@@ -71,13 +71,13 @@ mod store_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn set_a_value_two_times_idempotently() {
+    async fn put_a_value_two_times_idempotently() {
         let store = Store::new();
 
-        let was_modified_1 = store.set("foo", "bar").await;
+        let was_modified_1 = store.put("foo", "bar").await;
         let res1 = store.get("foo").await.unwrap();
 
-        let was_modified_2 = store.set("foo", "bar").await;
+        let was_modified_2 = store.put("foo", "bar").await;
         let res2 = store.get("foo").await.unwrap();
 
         assert_eq!(was_modified_1, true);
