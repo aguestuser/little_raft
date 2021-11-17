@@ -21,9 +21,13 @@ use crate::protocol::request::{Command, Request};
 use crate::protocol::response::Response;
 
 #[cfg(not(test))]
-const RESPONSE_TIMEOUT_IN_MILLIS: u64 = 1000;
+const BROADCAST_TIMEOUT_MILLIS: u64 = 1000;
 #[cfg(test)]
-const RESPONSE_TIMEOUT_IN_MILLIS: u64 = 10;
+const BROADCAST_TIMEOUT_MILLIS: u64 = 10;
+#[cfg(not(test))]
+const DM_TIMEOUT_MILLIS: u64 = 1000;
+#[cfg(test)]
+const DM_TIMEOUT_MILLIS: u64 = 20;
 
 pub struct Client {
     peer_addresses: Vec<SocketAddr>,
@@ -118,6 +122,7 @@ impl Client {
         connection: Arc<ClientConnection>,
         response_handlers: Arc<DashMap<u64, OneShotSender<Response>>>,
         request: Request,
+        timeout_in_millis: u64,
     ) -> Result<Response> {
         let (response_tx, response_rx) = oneshot::channel::<Response>();
         let _ = response_handlers.insert(request.id, response_tx);
@@ -127,7 +132,7 @@ impl Client {
             response = response_rx => {
                 response.map_err(|_| Box::new(PeerConnectionClosed) as AsyncError)
             }
-            _ = time::sleep(Duration::from_millis(RESPONSE_TIMEOUT_IN_MILLIS)) => {
+            _ = time::sleep(Duration::from_millis(timeout_in_millis)) => {
                 Err(Box::new(RequestTimeout))
             }
         };
@@ -145,6 +150,7 @@ impl Client {
                     id: self.next_id(),
                     command: command.clone(),
                 },
+                DM_TIMEOUT_MILLIS,
             )
             .await
         } else {
@@ -182,7 +188,12 @@ impl Client {
                 let handlers = self.response_handlers.clone();
                 let id = self.next_id();
                 let command = command.clone();
-                Client::write(connection.clone(), handlers, Request { id, command })
+                Client::write(
+                    connection.clone(),
+                    handlers,
+                    Request { id, command },
+                    BROADCAST_TIMEOUT_MILLIS,
+                )
             })
             .map(tokio::spawn)
             .buffer_unordered(num_peers)

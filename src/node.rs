@@ -2,13 +2,14 @@ use crate::error::{PermissionError, Result};
 use crate::protocol::client::{Client, ClientConfig};
 use crate::protocol::request::Command::{Get, Invalid, Set};
 use crate::protocol::request::Request;
-use crate::protocol::response::Response;
+use crate::protocol::response::{Outcome, Response};
 use crate::protocol::server::{Server, ServerConfig};
 use crate::store::Store;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
 pub struct Node {
+    pub address: SocketAddr,
     role: Arc<Role>, // arc b/c we need to share role across task boundaries. (refactor to avoid that?)
     client: Arc<Client>,
     server: Server,
@@ -34,6 +35,7 @@ impl Node {
             role,
         } = cfg;
         Self {
+            address: address.clone(),
             role: Arc::new(role),
             client: Arc::new(Client::new(ClientConfig { peer_addresses })),
             server: Server::new(ServerConfig { address }),
@@ -73,6 +75,7 @@ impl Node {
     }
 
     async fn handle_get(role: Arc<Role>, store: Arc<Store>, id: u64, key: String) -> Response {
+        // TODO: avoid this branching by extracting `LeaderNode` and `FollowerNode` impls
         match role.as_ref() {
             Role::Follower => {
                 Response::error_of(id, PermissionError::FollowersMayNotGet.to_string())
@@ -92,17 +95,22 @@ impl Node {
         key: String,
         value: String,
     ) -> Response {
+        // TODO: avoid this branching by extracting `LeaderNode` and `FollowerNode` impls
         match role.as_ref() {
             Role::Follower => {
                 let was_modified = store.set(&key, &value).await;
                 Response::of_set(id, was_modified)
             }
             Role::Leader => {
-                let set_cmd = Set {
+                let command = Set {
                     key: key.clone(),
                     value: value.clone(),
                 };
-                match client.broadcast(set_cmd).await {
+                let filter = |r: Response| match r.outcome {
+                    Outcome::OfSet { .. } => Some(r),
+                    _ => None,
+                };
+                match client.broadcast_and_filter(command, filter).await {
                     Ok(_) => {
                         let was_modified = store.set(&key, &value).await;
                         Response::of_set(id, was_modified.clone())
@@ -114,155 +122,291 @@ impl Node {
     }
 }
 
+#[cfg(test)]
 mod test_node {
-    // use super::*;
+    use super::*;
+    use crate::error::NetworkError::BroadcastFailure;
+    use crate::error::PermissionError::FollowersMayNotGet;
+    use crate::protocol::connection::ServerConnection;
+    use crate::protocol::request::Command;
+    use crate::protocol::response::Outcome;
+    use crate::test_support::gen::Gen;
+    use tokio::net::TcpListener;
 
-    // #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    // async fn performs_get() {
-    //     let (mut writer, mut receiver) = setup().await;
-    //
-    //     let request: Bytes = [r#"{"id":0,"command":{"type":"Get","key":"foo"}}"#, "\n"]
-    //         .concat()
-    //         .into();
-    //     writer.write_all(&request).await.unwrap();
-    //     writer.flush().await.unwrap();
-    //
-    //     let expected_response: Bytes =
-    //         [r#"{"id":0,"outcome":{"type":"OfGet","value":null}}"#, "\n"]
-    //             .concat()
-    //             .into();
-    //     let actual_response = receiver.recv().await.unwrap();
-    //     assert_eq!(expected_response, actual_response);
-    // }
-    //
-    // #[tokio::test]
-    // async fn performs_set() {
-    //     let (mut writer, mut receiver) = setup().await;
-    //
-    //     let request: Bytes = [
-    //         r#"{"id":0,"command":{"type":"Set","key":"foo","value":"bar"}}"#,
-    //         "\n",
-    //     ]
-    //     .concat()
-    //     .into();
-    //     writer.write_all(&request).await.unwrap();
-    //     writer.flush().await.unwrap();
-    //
-    //     let expected_response: Bytes = [
-    //         r#"{"id":0,"outcome":{"type":"OfSet","was_modified":true}}"#,
-    //         "\n",
-    //     ]
-    //     .concat()
-    //     .into();
-    //     let actual_response = receiver.recv().await.unwrap();
-    //     assert_eq!(expected_response, actual_response);
-    // }
-    //
-    // #[tokio::test]
-    // async fn performs_set_idempotently() {
-    //     let (mut writer, mut receiver) = setup().await;
-    //
-    //     let req_0: Bytes = [
-    //         r#"{"id":0,"command":{"type":"Set","key":"foo","value":"bar"}}"#,
-    //         "\n",
-    //     ]
-    //     .concat()
-    //     .into();
-    //     let req_1: Bytes = [
-    //         r#"{"id":1,"command":{"type":"Set","key":"foo","value":"bar"}}"#,
-    //         "\n",
-    //     ]
-    //     .concat()
-    //     .into();
-    //
-    //     writer.write_all(&req_0).await.unwrap();
-    //     writer.flush().await.unwrap();
-    //     writer.write_all(&req_1).await.unwrap();
-    //     writer.flush().await.unwrap();
-    //
-    //     let actual_resp_1 = receiver.recv().await.unwrap();
-    //     let expected_resp_1: Bytes = [
-    //         r#"{"id":0,"outcome":{"type":"OfSet","was_modified":true}}"#,
-    //         "\n",
-    //     ]
-    //     .concat()
-    //     .into();
-    //     assert_eq!(expected_resp_1, actual_resp_1);
-    //
-    //     let actual_resp_1 = receiver.recv().await.unwrap();
-    //     let expected_resp_1: Bytes = [
-    //         r#"{"id":1,"outcome":{"type":"OfSet","was_modified":false}}"#,
-    //         "\n",
-    //     ]
-    //     .concat()
-    //     .into();
-    //     assert_eq!(expected_resp_1, actual_resp_1);
-    // }
-    //
-    // #[tokio::test]
-    // async fn performs_set_and_get() {
-    //     let (mut writer, mut receiver) = setup().await;
-    //
-    //     let get_req_0: Bytes = [r#"{"id":0,"command":{"type":"Get","key":"foo"}}"#, "\n"]
-    //         .concat()
-    //         .into();
-    //     let set_req_1: Bytes = [
-    //         r#"{"id":1,"command":{"type":"Set","key":"foo","value":"bar"}}"#,
-    //         "\n",
-    //     ]
-    //     .concat()
-    //     .into();
-    //     let get_req_2: Bytes = [r#"{"id":2,"command":{"type":"Get","key":"foo"}}"#, "\n"]
-    //         .concat()
-    //         .into();
-    //
-    //     writer.write_all(&get_req_0).await.unwrap();
-    //     writer.flush().await.unwrap();
-    //     writer.write_all(&set_req_1).await.unwrap();
-    //     writer.flush().await.unwrap();
-    //     writer.write_all(&get_req_2).await.unwrap();
-    //     writer.flush().await.unwrap();
-    //
-    //     let expected_resp_0: Bytes = [r#"{"id":0,"outcome":{"type":"OfGet","value":null}}"#, "\n"]
-    //         .concat()
-    //         .into();
-    //     let actual_resp_0 = receiver.recv().await.unwrap();
-    //     assert_eq!(expected_resp_0, actual_resp_0);
-    //
-    //     let expected_resp_1: Bytes = [
-    //         r#"{"id":1,"outcome":{"type":"OfSet","was_modified":true}}"#,
-    //         "\n",
-    //     ]
-    //     .concat()
-    //     .into();
-    //     let actual_resp_1 = receiver.recv().await.unwrap();
-    //     assert_eq!(expected_resp_1, actual_resp_1);
-    //
-    //     let expected_resp_2: Bytes = [r#"{"id":2,"outcome":{"type":"OfGet","value":"bar"}}"#, "\n"]
-    //         .concat()
-    //         .into();
-    //     let actual_resp_2 = receiver.recv().await.unwrap();
-    //     assert_eq!(expected_resp_2, actual_resp_2);
-    // }
-    //
-    // #[tokio::test]
-    // async fn handles_invalid_request() {
-    //     let (mut writer, mut receiver) = setup().await;
-    //
-    //     let req: Bytes = [r#"{"id":0,"command":{"type":"Set","key":"foo"}}"#, "\n"]
-    //         .concat()
-    //         .into();
-    //
-    //     writer.write_all(&req).await.unwrap();
-    //     writer.flush().await.unwrap();
-    //
-    //     let actual_resp = receiver.recv().await.unwrap();
-    //     let expected_resp: Bytes = [
-    //         r#"{"id":12459724080765958563,"outcome":{"type":"Error","msg":"missing field `value` at line 1 column 45"}}"#,
-    //         "\n",
-    //     ]
-    //     .concat()
-    //     .into();
-    //     assert_eq!(expected_resp, actual_resp);
-    // }
+    lazy_static! {
+        static ref NUM_PEERS: usize = 5;
+        static ref MAJORITY: usize = *NUM_PEERS / 2;
+        static ref GET_CMD: Command = Command::Get {
+            key: "foo".to_string(),
+        };
+        static ref SET_CMD: Command = Command::Set {
+            key: "foo".to_string(),
+            value: "bar".to_string(),
+        };
+        static ref SET_OUTCOME: Outcome = Outcome::OfSet { was_modified: true };
+        static ref ERROR_OUTCOME: Outcome = Outcome::Error {
+            msg: "oh noes!".to_string()
+        };
+    }
+
+    struct Runner {
+        node_address: String,
+        client: Client,
+    }
+
+    async fn setup_with(role: Role, outcomes: Vec<Outcome>) -> Runner {
+        let outcomes = Arc::new(outcomes);
+        let peer_addresses: Vec<SocketAddr> = (0..*NUM_PEERS).map(|_| Gen::socket_addr()).collect();
+
+        for (peer_idx, peer_addr) in peer_addresses.clone().into_iter().enumerate() {
+            let listener = TcpListener::bind(peer_addr).await.unwrap();
+            let outcomes = outcomes.clone();
+
+            tokio::spawn(async move {
+                for _ in 0..*NUM_PEERS {
+                    let (socket, _) = listener.accept().await.unwrap();
+                    // println!("> Peer listening at {:?}", peer_addr);
+
+                    let outcomes = outcomes.clone();
+                    tokio::spawn(async move {
+                        let conn = ServerConnection::new(socket);
+                        loop {
+                            let req = conn.read().await.unwrap();
+                            // println!("> Peer at {:?} got request: {:?}", peer_addr, req);
+                            if !outcomes.is_empty() {
+                                let response = Response {
+                                    id: req.id,
+                                    outcome: outcomes[peer_idx].clone(),
+                                };
+                                conn.write(response).await.unwrap();
+                            }
+                        }
+                    });
+                }
+            });
+        }
+
+        let mut node = Node::new(NodeConfig {
+            address: Gen::socket_addr(),
+            peer_addresses: peer_addresses.clone(),
+            role,
+        });
+        let _ = node.run().await.unwrap();
+
+        let client = Client::new(ClientConfig {
+            peer_addresses: vec![node.address],
+        });
+        let _ = client.run().await.unwrap();
+
+        return Runner {
+            node_address: node.address.to_string(),
+            client,
+        };
+    }
+
+    #[tokio::test]
+    async fn leader_handles_get_of_missing_value() {
+        let Runner {
+            node_address,
+            client,
+            ..
+        } = setup_with(Role::Leader, vec![]).await;
+
+        let response = client.write_one(&node_address, &GET_CMD).await.unwrap();
+
+        assert_eq!(response.outcome, Outcome::OfGet { value: None });
+    }
+
+    #[tokio::test]
+    async fn leader_handles_successfully_replicated_put() {
+        let outcomes = std::iter::repeat(SET_OUTCOME.clone())
+            .take(*NUM_PEERS)
+            .collect::<Vec<Outcome>>();
+        let Runner {
+            node_address,
+            client,
+            ..
+        } = setup_with(Role::Leader, outcomes).await;
+
+        let response = client.write_one(&node_address, &SET_CMD).await.unwrap();
+
+        assert_eq!(response.outcome, Outcome::OfSet { was_modified: true });
+    }
+
+    #[tokio::test]
+    async fn leader_handles_unsuccessfully_replicated_put() {
+        let outcomes = std::iter::repeat(ERROR_OUTCOME.clone())
+            .take(*NUM_PEERS)
+            .collect::<Vec<Outcome>>();
+        let Runner {
+            node_address,
+            client,
+            ..
+        } = setup_with(Role::Leader, outcomes).await;
+
+        let set_response = client.write_one(&node_address, &SET_CMD).await.unwrap();
+        let get_response = client.write_one(&node_address, &GET_CMD).await.unwrap();
+
+        assert_eq!(
+            set_response.outcome,
+            Outcome::Error {
+                msg: BroadcastFailure.to_string()
+            }
+        );
+        assert_eq!(get_response.outcome, Outcome::OfGet { value: None });
+    }
+
+    #[tokio::test]
+    async fn leader_handles_timed_out_replication() {
+        let Runner {
+            node_address,
+            client,
+            ..
+        } = setup_with(Role::Leader, vec![]).await;
+
+        let response = client.write_one(&node_address, &SET_CMD).await.unwrap();
+
+        assert_eq!(
+            response.outcome,
+            Outcome::Error {
+                msg: BroadcastFailure.to_string()
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn leader_handles_get_of_put_value() {
+        let outcomes = std::iter::repeat(SET_OUTCOME.clone())
+            .take(*NUM_PEERS)
+            .collect::<Vec<Outcome>>();
+        let set_command = Command::Set {
+            key: "foo".to_string(),
+            value: "bar".to_string(),
+        };
+        let get_command = Command::Get {
+            key: "foo".to_string(),
+        };
+        let Runner {
+            node_address,
+            client,
+            ..
+        } = setup_with(Role::Leader, outcomes).await;
+
+        let _ = client.write_one(&node_address, &set_command).await.unwrap();
+        let get_response = client.write_one(&node_address, &get_command).await.unwrap();
+        assert_eq!(
+            get_response.outcome,
+            Outcome::OfGet {
+                value: Some("bar".to_string())
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn leader_handles_idempotent_puts() {
+        let outcomes = std::iter::repeat(SET_OUTCOME.clone())
+            .take(*NUM_PEERS)
+            .collect::<Vec<Outcome>>();
+        let set_command = Command::Set {
+            key: "foo".to_string(),
+            value: "bar".to_string(),
+        };
+        let Runner {
+            node_address,
+            client,
+            ..
+        } = setup_with(Role::Leader, outcomes).await;
+
+        let set_response_1 = client.write_one(&node_address, &set_command).await.unwrap();
+        let set_response_2 = client.write_one(&node_address, &set_command).await.unwrap();
+
+        assert_eq!(
+            set_response_1.outcome,
+            Outcome::OfSet { was_modified: true }
+        );
+        assert_eq!(
+            set_response_2.outcome,
+            Outcome::OfSet {
+                was_modified: false
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn leader_handles_sequential_puts() {
+        let outcomes = std::iter::repeat(SET_OUTCOME.clone())
+            .take(*NUM_PEERS)
+            .collect::<Vec<Outcome>>();
+        let set_command_1 = Command::Set {
+            key: "foo".to_string(),
+            value: "bar".to_string(),
+        };
+        let set_command_2 = Command::Set {
+            key: "foo".to_string(),
+            value: "baz".to_string(),
+        };
+        let get_command = Command::Get {
+            key: "foo".to_string(),
+        };
+
+        let Runner {
+            node_address,
+            client,
+            ..
+        } = setup_with(Role::Leader, outcomes).await;
+
+        let set_response_1 = client
+            .write_one(&node_address, &set_command_1)
+            .await
+            .unwrap();
+        let set_response_2 = client
+            .write_one(&node_address, &set_command_2)
+            .await
+            .unwrap();
+        let get_response = client.write_one(&node_address, &get_command).await.unwrap();
+
+        assert_eq!(
+            set_response_1.outcome,
+            Outcome::OfSet { was_modified: true }
+        );
+        assert_eq!(
+            set_response_2.outcome,
+            Outcome::OfSet { was_modified: true }
+        );
+        assert_eq!(
+            get_response.outcome,
+            Outcome::OfGet {
+                value: Some("baz".to_string()),
+            }
+        )
+    }
+
+    #[tokio::test]
+    async fn folllower_rejects_get() {
+        let Runner {
+            node_address,
+            client,
+            ..
+        } = setup_with(Role::Follower, vec![]).await;
+
+        let get_response = client.write_one(&node_address, &GET_CMD).await.unwrap();
+        assert_eq!(
+            get_response.outcome,
+            Outcome::Error {
+                msg: FollowersMayNotGet.to_string()
+            }
+        )
+    }
+
+    #[tokio::test]
+    async fn folllower_handles_put() {
+        let Runner {
+            node_address,
+            client,
+            ..
+        } = setup_with(Role::Follower, vec![]).await;
+
+        let set_response = client.write_one(&node_address, &SET_CMD).await.unwrap();
+        assert_eq!(set_response.outcome, Outcome::OfSet { was_modified: true });
+    }
 }
