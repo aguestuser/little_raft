@@ -1,4 +1,4 @@
-use crate::protocol::Hasher;
+use crate::tcp::Hasher;
 use serde::{Deserialize, Serialize};
 use serde_json;
 
@@ -42,7 +42,7 @@ impl Into<Vec<u8>> for Request {
 #[cfg(test)]
 mod request_tests {
     use super::*;
-    use crate::protocol::request::Command::Invalid;
+    use crate::tcp::request::Command::Invalid;
 
     #[test]
     fn deserializing_get_request() {

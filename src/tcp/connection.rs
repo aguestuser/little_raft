@@ -3,9 +3,9 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
 
 use crate::error::Result;
-use crate::protocol::request::Request;
-use crate::protocol::response::Response;
-use crate::protocol::NEWLINE;
+use crate::tcp::request::Request;
+use crate::tcp::response::Response;
+use crate::tcp::NEWLINE;
 use std::marker::PhantomData;
 use tokio::sync::Mutex;
 
@@ -75,11 +75,11 @@ pub type ServerConnection = Connection<Request, Response>;
 
 #[cfg(test)]
 mod connection_tests {
-    use crate::protocol::connection::ClientConnection;
+    use crate::tcp::connection::ClientConnection;
 
     use super::*;
-    use crate::protocol::request::Command;
-    use crate::protocol::response::Outcome;
+    use crate::tcp::request::Command;
+    use crate::tcp::response::Outcome;
 
     #[tokio::test]
     async fn client_reads() {

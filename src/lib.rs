@@ -5,6 +5,6 @@ extern crate lazy_static;
 pub mod config;
 pub mod error;
 pub mod node;
-pub mod protocol;
 pub mod store;
+pub mod tcp;
 mod test_support;

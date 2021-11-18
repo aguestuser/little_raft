@@ -7,10 +7,10 @@ use tokio::sync::oneshot::Sender as OneShotSender;
 use tokio::sync::{mpsc, oneshot, Mutex};
 
 use crate::error::Result;
-use crate::protocol::connection::ServerConnection;
-use crate::protocol::request::Request;
-use crate::protocol::response::Response;
-use crate::protocol::REQUEST_BUFFER_SIZE;
+use crate::tcp::connection::ServerConnection;
+use crate::tcp::request::Request;
+use crate::tcp::response::Response;
+use crate::tcp::REQUEST_BUFFER_SIZE;
 
 pub struct Server {
     address: SocketAddr,
@@ -106,7 +106,7 @@ mod server_tests {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
     use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 
-    use crate::protocol::NEWLINE;
+    use crate::tcp::NEWLINE;
     use crate::test_support::gen::Gen;
 
     use super::*;

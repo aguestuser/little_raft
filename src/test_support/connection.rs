@@ -6,8 +6,8 @@ use std::sync::mpsc::{Receiver, Sender};
 use futures::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, BufReader, BufWriter, ReadBuf};
 
-use crate::protocol::connection::Connection;
-use crate::protocol::connection::{AsyncReader, AsyncWriter};
+use crate::tcp::connection::Connection;
+use crate::tcp::connection::{AsyncReader, AsyncWriter};
 use std::marker::PhantomData;
 use tokio::sync::Mutex;
 

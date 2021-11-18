@@ -16,9 +16,9 @@ use crate::error::NetworkError::{
     BroadcastFailure, NoPeerAtAddress, PeerConnectionClosed, RequestTimeout, TaskJoinFailure,
 };
 use crate::error::{AsyncError, Result};
-use crate::protocol::connection::ClientConnection;
-use crate::protocol::request::{Command, Request};
-use crate::protocol::response::Response;
+use crate::tcp::connection::ClientConnection;
+use crate::tcp::request::{Command, Request};
+use crate::tcp::response::Response;
 
 #[cfg(not(test))]
 const BROADCAST_TIMEOUT_MILLIS: u64 = 1000;
@@ -228,9 +228,9 @@ mod test_client {
     use tokio::sync::mpsc::Receiver;
     use tokio::sync::{mpsc, Mutex};
 
-    use crate::protocol::connection::ServerConnection;
-    use crate::protocol::request::Command;
-    use crate::protocol::response::Outcome;
+    use crate::tcp::connection::ServerConnection;
+    use crate::tcp::request::Command;
+    use crate::tcp::response::Outcome;
     use crate::test_support::gen::Gen;
 
     use super::*;
