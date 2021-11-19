@@ -1,3 +1,7 @@
 /target
 Cargo.lock
 /.idea/
+/data/test_log_1.txt
+/data/test_log_2.txt
+/data/test_log_3.txt
+/data/test_log_4.txt

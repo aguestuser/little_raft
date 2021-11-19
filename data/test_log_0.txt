@@ -1,0 +1,3 @@
+{"term":1,"command":{"type":"Put","key":"foo","value":"bar"}}
+{"term":2,"command":{"type":"Put","key":"foo","value":"baz"}}
+{"term":3,"command":{"type":"Put","key":"foo","value":"qux"}}

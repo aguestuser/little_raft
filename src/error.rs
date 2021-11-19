@@ -37,4 +37,8 @@ pub enum PersistenceError {
     InsertionError,
     #[error(display = "failed to retrieve value from store")]
     RetrievalError,
+    #[error(display = "failed to deserialize entry: {:?}", _0)]
+    LogDeserializationError(String),
+    #[error(display = "tried to pop from empty log")]
+    RemoveFromEmptyLogError,
 }
