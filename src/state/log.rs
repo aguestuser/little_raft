@@ -9,13 +9,13 @@ use crate::error::PersistenceError::{LogDeserializationError, RemoveFromEmptyLog
 use crate::error::{AsyncError, Result};
 use crate::NEWLINE;
 
-#[derive(Clone, Eq, PartialEq, Debug, Deserialize, Serialize)]
-pub struct Entry {
-    term: usize,
-    command: Command,
+#[derive(Clone, Eq, PartialEq, Debug, Deserialize, Serialize, Hash)]
+pub struct LogEntry {
+    pub(crate) term: usize,
+    pub(crate) command: Command,
 }
 
-#[derive(Clone, Eq, PartialEq, Debug, Deserialize, Serialize)]
+#[derive(Clone, Eq, PartialEq, Debug, Deserialize, Serialize, Hash)]
 #[serde(tag = "type", deny_unknown_fields)]
 pub enum Command {
     Put { key: String, value: String },
@@ -23,11 +23,11 @@ pub enum Command {
 
 pub struct Log {
     pub path: String,
-    pub entries: Vec<Entry>,
+    pub entries: Vec<LogEntry>,
 }
 
-impl Entry {
-    fn from(line: String) -> Result<Entry> {
+impl LogEntry {
+    fn from(line: String) -> Result<LogEntry> {
         serde_json::from_str(&line)
             .map_err(|e| Box::new(LogDeserializationError(e.to_string())) as AsyncError)
     }
@@ -39,7 +39,7 @@ impl Entry {
     }
 }
 
-impl Into<String> for Entry {
+impl Into<String> for LogEntry {
     fn into(self) -> String {
         self.to_string()
     }
@@ -50,8 +50,8 @@ impl Log {
         let file = File::open(path).await?;
         let entries = LinesStream::new(BufReader::new(file).lines())
             .filter_map(|line| line.ok())
-            .filter_map(|ok_line| Entry::from(ok_line).ok())
-            .collect::<Vec<Entry>>()
+            .filter_map(|ok_line| LogEntry::from(ok_line).ok())
+            .collect::<Vec<LogEntry>>()
             .await;
         Ok(Log {
             entries,
@@ -59,7 +59,7 @@ impl Log {
         })
     }
 
-    pub async fn append(&mut self, entry: Entry) -> Result<()> {
+    pub async fn append(&mut self, entry: LogEntry) -> Result<()> {
         let file = OpenOptions::new().append(true).open(&self.path).await?;
 
         let mut writer = BufWriter::new(file);
@@ -71,14 +71,14 @@ impl Log {
         Ok(())
     }
 
-    pub async fn append_many(&mut self, entries: Vec<Entry>) -> Result<()> {
+    pub async fn append_many(&mut self, entries: Vec<LogEntry>) -> Result<()> {
         for entry in entries {
             self.append(entry).await?;
         }
         Ok(())
     }
 
-    pub async fn remove(&mut self) -> Result<Entry> {
+    pub async fn remove(&mut self) -> Result<LogEntry> {
         let file = OpenOptions::new().write(true).open(&self.path).await?;
         let err = || Box::new(RemoveFromEmptyLogError) as AsyncError;
 
@@ -108,7 +108,7 @@ mod test_log {
     //  parallel by not always clobbering the same log file in `data/test_log_x.txt`.
 
     impl Log {
-        pub async fn new(path: String, entries: Vec<Entry>) -> Result<Log> {
+        pub async fn new(path: String, entries: Vec<LogEntry>) -> Result<Log> {
             let log = Log { path, entries };
             let _ = log.dump().await?;
             Ok(log)
@@ -134,7 +134,7 @@ mod test_log {
 
     #[test]
     fn serializes_a_log_entry() {
-        let entry = Entry {
+        let entry = LogEntry {
             term: 1,
             command: Command::Put {
                 key: "foo".to_string(),
@@ -150,14 +150,14 @@ mod test_log {
     fn deserializes_a_log_entry() {
         let serialized_entry =
             r#"{"term":1,"command":{"type":"Put","key":"foo","value":"bar"}}"#.to_string();
-        let expected_result = Entry {
+        let expected_result = LogEntry {
             term: 1,
             command: Command::Put {
                 key: "foo".to_string(),
                 value: "bar".to_string(),
             },
         };
-        let actual_result = Entry::from(serialized_entry).unwrap();
+        let actual_result = LogEntry::from(serialized_entry).unwrap();
         assert_eq!(expected_result, actual_result);
     }
 
@@ -169,21 +169,21 @@ mod test_log {
         assert_eq!(
             log.entries,
             vec![
-                Entry {
+                LogEntry {
                     term: 1,
                     command: Command::Put {
                         key: "foo".to_string(),
                         value: "bar".to_string(),
                     }
                 },
-                Entry {
+                LogEntry {
                     term: 2,
                     command: Command::Put {
                         key: "foo".to_string(),
                         value: "baz".to_string(),
                     }
                 },
-                Entry {
+                LogEntry {
                     term: 3,
                     command: Command::Put {
                         key: "foo".to_string(),
@@ -197,21 +197,21 @@ mod test_log {
     #[tokio::test]
     async fn appends_entry_to_log() {
         let path = "data/test_log_1.txt";
-        let original_entries = vec![Entry {
+        let original_entries = vec![LogEntry {
             term: 1,
             command: Command::Put {
                 key: "foo".to_string(),
                 value: "bar".to_string(),
             },
         }];
-        let entry_to_append = Entry {
+        let entry_to_append = LogEntry {
             term: 2,
             command: Command::Put {
                 key: "foo".to_string(),
                 value: "baz".to_string(),
             },
         };
-        let expected_final_entries: Vec<Entry> =
+        let expected_final_entries: Vec<LogEntry> =
             [original_entries.clone(), vec![entry_to_append.clone()]].concat();
 
         let mut log = Log::new(String::from(path), original_entries)
@@ -228,14 +228,14 @@ mod test_log {
     async fn removes_entry_from_log() {
         let path = "data/test_log_2.txt";
         let original_entries = vec![
-            Entry {
+            LogEntry {
                 term: 1,
                 command: Command::Put {
                     key: "foo".to_string(),
                     value: "bar".to_string(),
                 },
             },
-            Entry {
+            LogEntry {
                 term: 2,
                 command: Command::Put {
                     key: "foo".to_string(),
@@ -243,7 +243,7 @@ mod test_log {
                 },
             },
         ];
-        let expected_final_entries: Vec<Entry> = vec![Entry {
+        let expected_final_entries: Vec<LogEntry> = vec![LogEntry {
             term: 1,
             command: Command::Put {
                 key: "foo".to_string(),
@@ -264,7 +264,7 @@ mod test_log {
     #[tokio::test]
     async fn appends_many_entries_to_log() {
         let path = "data/test_log_3.txt";
-        let original_entries = vec![Entry {
+        let original_entries = vec![LogEntry {
             term: 1,
             command: Command::Put {
                 key: "foo".to_string(),
@@ -272,14 +272,14 @@ mod test_log {
             },
         }];
         let entries_to_append = vec![
-            Entry {
+            LogEntry {
                 term: 2,
                 command: Command::Put {
                     key: "foo".to_string(),
                     value: "baz".to_string(),
                 },
             },
-            Entry {
+            LogEntry {
                 term: 2,
                 command: Command::Put {
                     key: "foo".to_string(),
@@ -303,21 +303,21 @@ mod test_log {
     async fn removes_many_entries_from_log() {
         let path = "data/test_log_4.txt";
         let original_entries = vec![
-            Entry {
+            LogEntry {
                 term: 1,
                 command: Command::Put {
                     key: "foo".to_string(),
                     value: "bar".to_string(),
                 },
             },
-            Entry {
+            LogEntry {
                 term: 2,
                 command: Command::Put {
                     key: "foo".to_string(),
                     value: "baz".to_string(),
                 },
             },
-            Entry {
+            LogEntry {
                 term: 3,
                 command: Command::Put {
                     key: "foo".to_string(),
@@ -325,7 +325,7 @@ mod test_log {
                 },
             },
         ];
-        let expected_final_entries: Vec<Entry> = vec![Entry {
+        let expected_final_entries: Vec<LogEntry> = vec![LogEntry {
             term: 1,
             command: Command::Put {
                 key: "foo".to_string(),
