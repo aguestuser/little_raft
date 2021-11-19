@@ -1,4 +1,4 @@
-use crate::rpc::Hasher;
+use crate::hash;
 use serde::{Deserialize, Serialize};
 use serde_json;
 
@@ -51,7 +51,7 @@ impl Into<Vec<u8>> for Response {
 impl From<Vec<u8>> for Response {
     fn from(bs: Vec<u8>) -> Self {
         serde_json::from_slice(&*bs).unwrap_or_else(|e| Response {
-            id: Hasher::hash(&bs),
+            id: hash(&bs),
             outcome: Outcome::Invalid { msg: e.to_string() },
         })
     }

@@ -1,6 +1,7 @@
-use crate::rpc::Hasher;
 use serde::{Deserialize, Serialize};
 use serde_json;
+
+use crate::hash;
 
 #[derive(Clone, Eq, PartialEq, Debug, Deserialize, Serialize, Hash)]
 #[serde(deny_unknown_fields)]
@@ -27,7 +28,7 @@ impl Request {
 impl From<Vec<u8>> for Request {
     fn from(bs: Vec<u8>) -> Request {
         serde_json::from_slice(&bs).unwrap_or_else(|e| Request {
-            id: Hasher::hash(&bs),
+            id: hash(&bs),
             command: Command::Invalid { msg: e.to_string() },
         })
     }
@@ -41,8 +42,9 @@ impl Into<Vec<u8>> for Request {
 
 #[cfg(test)]
 mod request_tests {
-    use super::*;
     use crate::rpc::request::Command::Invalid;
+
+    use super::*;
 
     #[test]
     fn deserializing_get_request() {
@@ -112,7 +114,7 @@ mod request_tests {
         assert_eq!(
             Request::from(input.clone()),
             Request {
-                id: Hasher::hash(&input),
+                id: hash(&input),
                 command: Invalid {
                     msg: "expected ident at line 1 column 2".to_string(),
                 }

@@ -1,26 +1,23 @@
-use crate::error::Result;
-use crate::state::log::{Command, Log, LogEntry};
+use crate::state::log::{Command, LogEntry};
 use crate::state::store::Store;
 use std::sync::Arc;
 
-const LOG_PATH: &'static str = "data/log.txt";
-
-struct StateMachine {
+pub struct StateMachine {
     store: Arc<Store>,
 }
 
 impl StateMachine {
-    fn new(store: Arc<Store>) -> StateMachine {
+    pub fn new(store: Arc<Store>) -> StateMachine {
         StateMachine { store }
     }
 
-    async fn apply(&self, entry: LogEntry) {
+    pub async fn apply(&self, entry: LogEntry) {
         match entry.command {
             Command::Put { key, value } => self.store.put(&key, &value).await,
         };
     }
 
-    async fn apply_many(&self, entries: Vec<LogEntry>) {
+    pub async fn apply_many(&self, entries: Vec<LogEntry>) {
         for entry in entries {
             self.apply(entry).await;
         }
