@@ -1,10 +1,10 @@
 use crate::error::{PermissionError, Result};
-use crate::store::Store;
-use crate::tcp::client::{Client, ClientConfig};
-use crate::tcp::request::Command::{Get, Invalid, Put};
-use crate::tcp::request::Request;
-use crate::tcp::response::{Outcome, Response};
-use crate::tcp::server::{Server, ServerConfig};
+use crate::rpc::client::{Client, ClientConfig};
+use crate::rpc::request::Command::{Get, Invalid, Put};
+use crate::rpc::request::Request;
+use crate::rpc::response::{Outcome, Response};
+use crate::rpc::server::{Server, ServerConfig};
+use crate::state::store::Store;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -127,9 +127,9 @@ mod test_node {
     use super::*;
     use crate::error::NetworkError::BroadcastFailure;
     use crate::error::PermissionError::FollowersMayNotGet;
-    use crate::tcp::connection::ServerConnection;
-    use crate::tcp::request::Command;
-    use crate::tcp::response::Outcome;
+    use crate::rpc::connection::ServerConnection;
+    use crate::rpc::request::Command;
+    use crate::rpc::response::Outcome;
     use crate::test_support::gen::Gen;
     use tokio::net::TcpListener;
 

@@ -1,4 +1,4 @@
-use crate::tcp::Hasher;
+use crate::rpc::Hasher;
 use serde::{Deserialize, Serialize};
 use serde_json;
 

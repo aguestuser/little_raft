@@ -1,8 +1,8 @@
 #![allow(dead_code)]
-use crate::tcp::client::ClientConfig;
-use crate::tcp::request::{Command, Request};
-use crate::tcp::response::{Outcome, Response};
-use crate::tcp::server::ServerConfig;
+use crate::rpc::client::ClientConfig;
+use crate::rpc::request::{Command, Request};
+use crate::rpc::response::{Outcome, Response};
+use crate::rpc::server::ServerConfig;
 use rand::seq::SliceRandom;
 use rand::Rng;
 use std::net::SocketAddr;

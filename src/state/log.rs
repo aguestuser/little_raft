@@ -7,7 +7,7 @@ use tokio_stream::StreamExt;
 
 use crate::error::PersistenceError::{LogDeserializationError, RemoveFromEmptyLogError};
 use crate::error::{AsyncError, Result};
-use crate::tcp::NEWLINE;
+use crate::NEWLINE;
 
 #[derive(Clone, Eq, PartialEq, Debug, Deserialize, Serialize)]
 pub struct Entry {

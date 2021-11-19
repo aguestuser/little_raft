@@ -5,7 +5,7 @@ use std::error::Error;
 #[cfg(not(feature = "std"))]
 use std::fmt::Display;
 
-use crate::tcp::request::Request;
+use crate::rpc::request::Request;
 use err_derive::Error;
 
 pub type AsyncError = Box<dyn std::error::Error + Send + Sync>;

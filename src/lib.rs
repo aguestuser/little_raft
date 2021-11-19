@@ -2,10 +2,10 @@
 #[macro_use]
 extern crate lazy_static;
 
-pub mod config;
 pub mod error;
-pub mod log;
 pub mod node;
-pub mod store;
-pub mod tcp;
+pub mod rpc;
+pub mod state;
 mod test_support;
+
+pub const NEWLINE: u8 = '\n' as u8;

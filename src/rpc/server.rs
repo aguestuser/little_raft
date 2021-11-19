@@ -7,10 +7,10 @@ use tokio::sync::oneshot::Sender as OneShotSender;
 use tokio::sync::{mpsc, oneshot, Mutex};
 
 use crate::error::Result;
-use crate::tcp::connection::ServerConnection;
-use crate::tcp::request::Request;
-use crate::tcp::response::Response;
-use crate::tcp::REQUEST_BUFFER_SIZE;
+use crate::rpc::connection::ServerConnection;
+use crate::rpc::request::Request;
+use crate::rpc::response::Response;
+use crate::rpc::REQUEST_BUFFER_SIZE;
 
 pub struct Server {
     address: SocketAddr,
@@ -79,11 +79,9 @@ impl Server {
 
                 match connection.read().await {
                     Ok(req) => {
-                        println!("req: {:?}", req);
                         let _ = request_tx.send((req, response_tx)).await;
                     }
                     Err(e) => {
-                        println!("err");
                         // TODO: bubble up?
                         eprintln!("ERROR reading request: {}", e.to_string());
                     }
@@ -106,8 +104,8 @@ mod server_tests {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
     use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 
-    use crate::tcp::NEWLINE;
     use crate::test_support::gen::Gen;
+    use crate::NEWLINE;
 
     use super::*;
 
