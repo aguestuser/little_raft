@@ -6,8 +6,8 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::oneshot::Sender as OneShotSender;
 use tokio::sync::{mpsc, oneshot, Mutex};
 
-use crate::api::request::RequestEnvelope;
-use crate::api::response::{Response, ResponseEnvelope};
+use crate::api::request::ApiRequestEnvelope;
+use crate::api::response::{ApiResponse, ApiResponseEnvelope};
 use crate::api::ServerConnection;
 use crate::api::REQUEST_BUFFER_SIZE;
 use crate::Result;
@@ -15,8 +15,8 @@ use crate::Result;
 pub struct Server {
     address: SocketAddr,
     tcp_listener: Option<Arc<TcpListener>>,
-    request_sender: Sender<(RequestEnvelope, Responder)>,
-    pub request_receiver: Arc<Mutex<Receiver<(RequestEnvelope, Responder)>>>,
+    request_sender: Sender<(ApiRequestEnvelope, Responder)>,
+    pub request_receiver: Arc<Mutex<Receiver<(ApiRequestEnvelope, Responder)>>>,
 }
 
 #[derive(Clone)]
@@ -24,12 +24,12 @@ pub struct ServerConfig {
     pub address: SocketAddr,
 }
 
-type Responder = OneShotSender<ResponseEnvelope>;
+type Responder = OneShotSender<ApiResponseEnvelope>;
 
 impl Server {
     pub fn new(cfg: ServerConfig) -> Server {
         let (request_sender, request_receiver) =
-            mpsc::channel::<(RequestEnvelope, Responder)>(REQUEST_BUFFER_SIZE);
+            mpsc::channel::<(ApiRequestEnvelope, Responder)>(REQUEST_BUFFER_SIZE);
         Self {
             address: cfg.address,
             tcp_listener: Option::None,
@@ -69,13 +69,13 @@ impl Server {
     /// Process data from a socket connection
     async fn handle_messages(
         socket: TcpStream,
-        request_tx: Sender<(RequestEnvelope, OneShotSender<ResponseEnvelope>)>,
+        request_tx: Sender<(ApiRequestEnvelope, OneShotSender<ApiResponseEnvelope>)>,
     ) {
         let connection = Arc::new(ServerConnection::new(socket));
 
         tokio::spawn(async move {
             loop {
-                let (response_tx, response_rx) = oneshot::channel::<ResponseEnvelope>();
+                let (response_tx, response_rx) = oneshot::channel::<ApiResponseEnvelope>();
 
                 match connection.read().await {
                     Ok(req) => {
@@ -83,9 +83,9 @@ impl Server {
                     }
                     Err(e) => {
                         eprintln!("ERROR reading request: {}", e.to_string());
-                        let _ = response_tx.send(ResponseEnvelope {
+                        let _ = response_tx.send(ApiResponseEnvelope {
                             id: u64::MAX,
-                            body: Response::Error { msg: e.to_string() },
+                            body: ApiResponse::Error { msg: e.to_string() },
                         });
                     }
                 }
@@ -163,7 +163,7 @@ mod server_tests {
         client_writer.write_all(&*client_write).await.unwrap();
         client_writer.flush().await.unwrap();
 
-        let expected_request: RequestEnvelope = request_bytes.try_into().unwrap();
+        let expected_request: ApiRequestEnvelope = request_bytes.try_into().unwrap();
         let (actual_request, _) = server.request_receiver.lock().await.recv().await.unwrap();
         assert_eq!(expected_request, actual_request);
     }

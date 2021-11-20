@@ -12,8 +12,8 @@ use tokio::sync::oneshot::Sender as OneShotSender;
 use tokio::time;
 use tokio::time::Duration;
 
-use crate::api::request::{Request, RequestEnvelope};
-use crate::api::response::ResponseEnvelope;
+use crate::api::request::{ApiRequest, ApiRequestEnvelope};
+use crate::api::response::ApiResponseEnvelope;
 use crate::api::ClientConnection;
 use crate::error::NetworkError::{
     BroadcastFailure, NoPeerAtAddress, PeerConnectionClosed, RequestTimeout, TaskJoinFailure,
@@ -32,7 +32,7 @@ const DM_TIMEOUT_MILLIS: u64 = 20;
 pub struct Client {
     peer_addresses: Vec<SocketAddr>,
     peers: DashMap<String, Peer>,
-    response_handlers: Arc<DashMap<u64, OneShotSender<ResponseEnvelope>>>,
+    response_handlers: Arc<DashMap<u64, OneShotSender<ApiResponseEnvelope>>>,
     request_id: AtomicU64,
 }
 
@@ -120,11 +120,11 @@ impl Client {
     /// and return an `Err`.
     async fn write(
         connection: Arc<ClientConnection>,
-        response_handlers: Arc<DashMap<u64, OneShotSender<ResponseEnvelope>>>,
-        request: RequestEnvelope,
+        response_handlers: Arc<DashMap<u64, OneShotSender<ApiResponseEnvelope>>>,
+        request: ApiRequestEnvelope,
         timeout_in_millis: u64,
-    ) -> Result<ResponseEnvelope> {
-        let (response_tx, response_rx) = oneshot::channel::<ResponseEnvelope>();
+    ) -> Result<ApiResponseEnvelope> {
+        let (response_tx, response_rx) = oneshot::channel::<ApiResponseEnvelope>();
         let _ = response_handlers.insert(request.id, response_tx);
         connection.write(request).await?;
 
@@ -144,13 +144,13 @@ impl Client {
     pub async fn write_one(
         &self,
         peer_address: &String,
-        request: &Request,
-    ) -> Result<ResponseEnvelope> {
+        request: &ApiRequest,
+    ) -> Result<ApiResponseEnvelope> {
         if let Some(peer) = self.peers.get(peer_address) {
             Client::write(
                 peer.connection.clone(),
                 self.response_handlers.clone(),
-                RequestEnvelope {
+                ApiRequestEnvelope {
                     id: self.next_id(),
                     body: request.clone(),
                 },
@@ -164,7 +164,7 @@ impl Client {
 
     /// Broadcast a `request` to all peers in parallel, then wait for a majority of peers to reply
     /// with any response by delegating to `Client::broadcast_and_filter` with an always-true filter.
-    pub async fn broadcast(&self, request: Request) -> Result<Vec<ResponseEnvelope>> {
+    pub async fn broadcast(&self, request: ApiRequest) -> Result<Vec<ApiResponseEnvelope>> {
         self.broadcast_and_filter(request, |r| Some(r)).await
     }
 
@@ -175,9 +175,9 @@ impl Client {
     /// arrive from a majority of peers, without waiting for further responses from other peers.
     pub async fn broadcast_and_filter(
         &self,
-        request: Request,
-        filter: impl Fn(ResponseEnvelope) -> Option<ResponseEnvelope>,
-    ) -> Result<Vec<ResponseEnvelope>> {
+        request: ApiRequest,
+        filter: impl Fn(ApiResponseEnvelope) -> Option<ApiResponseEnvelope>,
+    ) -> Result<Vec<ApiResponseEnvelope>> {
         let num_peers = self.peers.len();
         let majority = num_peers / 2;
 
@@ -195,7 +195,7 @@ impl Client {
                 Client::write(
                     connection.clone(),
                     handlers,
-                    RequestEnvelope { id, body: request },
+                    ApiRequestEnvelope { id, body: request },
                     BROADCAST_TIMEOUT_MILLIS,
                 )
             })
@@ -207,7 +207,7 @@ impl Client {
                     .map_or(None, |response| filter(response))
             })
             .take(majority)
-            .collect::<Vec<ResponseEnvelope>>()
+            .collect::<Vec<ApiResponseEnvelope>>()
             .await;
 
         if successful_responses.len() < majority {
@@ -232,8 +232,8 @@ mod test_client {
     use tokio::sync::mpsc::Receiver;
     use tokio::sync::{mpsc, Mutex};
 
-    use crate::api::request::Request;
-    use crate::api::response::Response;
+    use crate::api::request::ApiRequest;
+    use crate::api::response::ApiResponse;
     use crate::api::ServerConnection;
     use crate::error::NetworkError;
     use crate::test_support::gen::Gen;
@@ -244,16 +244,16 @@ mod test_client {
         client_config: ClientConfig,
         peer_addresses: Vec<SocketAddr>,
         recipient_addresses: Vec<String>,
-        req_rx: Receiver<(SocketAddr, RequestEnvelope)>,
+        req_rx: Receiver<(SocketAddr, ApiRequestEnvelope)>,
     }
 
     lazy_static! {
         static ref NUM_PEERS: usize = 5;
         static ref MAJORITY: usize = *NUM_PEERS / 2;
-        static ref GET_REQ: Request = Request::Get {
+        static ref GET_REQ: ApiRequest = ApiRequest::Get {
             key: "foo".to_string()
         };
-        static ref PUT_REQ: Request = Request::Put {
+        static ref PUT_REQ: ApiRequest = ApiRequest::Put {
             key: "foo".to_string(),
             value: "bar".to_string(),
         };
@@ -263,17 +263,17 @@ mod test_client {
         setup_with(Vec::new(), Vec::new()).await
     }
 
-    async fn setup_with_responses(responses: Vec<Response>) -> Runner {
+    async fn setup_with_responses(responses: Vec<ApiResponse>) -> Runner {
         setup_with(responses, Vec::new()).await
     }
 
-    async fn setup_with(responses: Vec<Response>, fuzzed_ids: Vec<u64>) -> Runner {
+    async fn setup_with(responses: Vec<ApiResponse>, fuzzed_ids: Vec<u64>) -> Runner {
         let buf_size = *NUM_PEERS;
         let responses = Arc::new(responses);
         let fuzzed_ids = Arc::new(fuzzed_ids);
 
         let peer_addresses: Vec<SocketAddr> = (0..*NUM_PEERS).map(|_| Gen::socket_addr()).collect();
-        let (req_tx, req_rx) = mpsc::channel::<(SocketAddr, RequestEnvelope)>(buf_size);
+        let (req_tx, req_rx) = mpsc::channel::<(SocketAddr, ApiRequestEnvelope)>(buf_size);
 
         for (peer_idx, peer_addr) in peer_addresses.clone().into_iter().enumerate() {
             let listener = TcpListener::bind(peer_addr).await.unwrap();
@@ -299,7 +299,7 @@ mod test_client {
                             req_tx.send((peer_addr, req.clone())).await.unwrap();
                             // send canned response provided by test harness to client
                             if !responses.is_empty() {
-                                let response = ResponseEnvelope {
+                                let response = ApiResponseEnvelope {
                                     // respond with request id unless we have provided fuzzed ids
                                     id: if fuzzed_ids.is_empty() {
                                         req.id
@@ -448,7 +448,7 @@ mod test_client {
 
         let (expected_receiving_peers, expected_received_requests) = (
             HashSet::from_iter(peer_addresses.into_iter()),
-            HashSet::from_iter((0..5).map(|id| RequestEnvelope {
+            HashSet::from_iter((0..5).map(|id| ApiRequestEnvelope {
                 id,
                 body: GET_REQ.clone(),
             })),
@@ -456,14 +456,14 @@ mod test_client {
 
         let (actual_receiving_peers, actual_received_requests): (
             HashSet<SocketAddr>,
-            HashSet<RequestEnvelope>,
+            HashSet<ApiRequestEnvelope>,
         ) = futures::stream::iter(0..5)
             .map(|_| {
                 let rx = a_req_rx.clone();
                 async move { rx.lock().await.recv().await.unwrap() }
             })
             .buffer_unordered(5)
-            .collect::<HashSet<(SocketAddr, RequestEnvelope)>>()
+            .collect::<HashSet<(SocketAddr, ApiRequestEnvelope)>>()
             .await
             .into_iter()
             .unzip();
@@ -476,7 +476,7 @@ mod test_client {
     async fn handles_broadcast_response_from_majority_of_peers() {
         let mocked_responses = std::iter::repeat(Gen::response_to(GET_REQ.clone()))
             .take(*NUM_PEERS)
-            .collect::<Vec<Response>>();
+            .collect::<Vec<ApiResponse>>();
 
         let Runner {
             client_config,
@@ -488,7 +488,7 @@ mod test_client {
         let _ = client.run().await.unwrap();
         let _ = req_rx;
 
-        let responses: Vec<Response> = client
+        let responses: Vec<ApiResponse> = client
             .broadcast(GET_REQ.clone())
             .await
             .unwrap()
@@ -521,7 +521,7 @@ mod test_client {
     #[tokio::test]
     async fn filters_broadcast_responses_by_predicate() {
         let get_outcome = Gen::response_to(GET_REQ.clone());
-        let err_outcome = Response::Error {
+        let err_outcome = ApiResponse::Error {
             msg: "foo".to_string(),
         };
         let mocked_responses = (0..*NUM_PEERS)
@@ -543,8 +543,8 @@ mod test_client {
         let client = Client::new(client_config);
         let _ = client.run().await.unwrap();
         let _ = req_rx;
-        let filter = |env: ResponseEnvelope| match env.body {
-            Response::ToGet { .. } => Some(env),
+        let filter = |env: ApiResponseEnvelope| match env.body {
+            ApiResponse::ToGet { .. } => Some(env),
             _ => None,
         };
 

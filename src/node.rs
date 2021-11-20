@@ -2,9 +2,9 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use crate::api::client::{Client, ClientConfig};
-use crate::api::request::Request::{Get, Put};
-use crate::api::request::RequestEnvelope;
-use crate::api::response::{Response, ResponseEnvelope};
+use crate::api::request::ApiRequest::{Get, Put};
+use crate::api::request::ApiRequestEnvelope;
+use crate::api::response::{ApiResponse, ApiResponseEnvelope};
 use crate::api::server::{Server, ServerConfig};
 use crate::error::PermissionError;
 use crate::state::store::Store;
@@ -54,15 +54,30 @@ impl Node {
         let request_receiver = self.server.request_receiver.clone();
         let a_client = self.client.clone();
 
+        /********
+         * TODO:
+         *  - api designates calls from outside world, rpc designates calls from cluster
+         *  - listen for api requests and rpc requests on different ports
+         *  - move all api::client logic to rpc::client
+         *  - leader:
+         *    - handles ApiRequest::Get by fetching value from store, responding
+         *    - handles ApiRequest::Put by issuing RpcRequest::AppendEntry
+         *      (after converting from ApiRequest::Put to LogEntry::Command::Put)
+         *      via rpc::client (which needs to be refactored to handle responses appropriately)
+         *    - handles RpcResponse::ToAppendEntry as spec'ed in algo
+         *  - follower:
+         *    - handles RpcRequest::AppendEntry as spec'ed in algo
+         *******/
+
         tokio::spawn(async move {
             while let Some((envelope, responder)) = request_receiver.lock().await.recv().await {
-                let RequestEnvelope { id, body: request } = envelope;
+                let ApiRequestEnvelope { id, body: request } = envelope;
 
                 let role = role.clone();
                 let store = store.clone();
                 let a_client = a_client.clone();
 
-                let response: ResponseEnvelope = match request {
+                let response: ApiResponseEnvelope = match request {
                     Get { key } => Node::handle_get(role, store, id, key).await,
                     Put { key, value } => {
                         Node::handle_set(role, store, a_client, id, key, value).await
@@ -70,7 +85,7 @@ impl Node {
                 };
                 let _ = responder.send(response)?;
             }
-            Ok::<(), ResponseEnvelope>(())
+            Ok::<(), ApiResponseEnvelope>(())
         });
         Ok(())
     }
@@ -80,15 +95,15 @@ impl Node {
         store: Arc<Store>,
         id: u64,
         key: String,
-    ) -> ResponseEnvelope {
+    ) -> ApiResponseEnvelope {
         // TODO: avoid this branching by extracting `LeaderNode` and `FollowerNode` impls
         match role.as_ref() {
             Role::Follower => {
-                ResponseEnvelope::error_of(id, PermissionError::FollowersMayNotGet.to_string())
+                ApiResponseEnvelope::error_of(id, PermissionError::FollowersMayNotGet.to_string())
             }
             Role::Leader => {
                 let value = store.get(&key).await;
-                ResponseEnvelope::of_get(id, value)
+                ApiResponseEnvelope::of_get(id, value)
             }
         }
     }
@@ -100,28 +115,28 @@ impl Node {
         id: u64,
         key: String,
         value: String,
-    ) -> ResponseEnvelope {
+    ) -> ApiResponseEnvelope {
         // TODO: avoid this branching by extracting `LeaderNode` and `FollowerNode` impls
         match role.as_ref() {
             Role::Follower => {
                 let was_modified = store.put(&key, &value).await;
-                ResponseEnvelope::of_set(id, was_modified)
+                ApiResponseEnvelope::of_set(id, was_modified)
             }
             Role::Leader => {
                 let request = Put {
                     key: key.clone(),
                     value: value.clone(),
                 };
-                let filter = |r: ResponseEnvelope| match r.body {
-                    Response::ToPut { .. } => Some(r),
+                let filter = |r: ApiResponseEnvelope| match r.body {
+                    ApiResponse::ToPut { .. } => Some(r),
                     _ => None,
                 };
                 match client.broadcast_and_filter(request, filter).await {
                     Ok(_) => {
                         let was_modified = store.put(&key, &value).await;
-                        ResponseEnvelope::of_set(id, was_modified.clone())
+                        ApiResponseEnvelope::of_set(id, was_modified.clone())
                     }
-                    Err(e) => ResponseEnvelope::error_of(id, e.to_string()),
+                    Err(e) => ApiResponseEnvelope::error_of(id, e.to_string()),
                 }
             }
         }
@@ -132,8 +147,8 @@ impl Node {
 mod test_node {
     use tokio::net::TcpListener;
 
-    use crate::api::request::Request;
-    use crate::api::response::Response;
+    use crate::api::request::ApiRequest;
+    use crate::api::response::ApiResponse;
     use crate::api::ServerConnection;
     use crate::error::NetworkError::BroadcastFailure;
     use crate::error::PermissionError::FollowersMayNotGet;
@@ -144,15 +159,15 @@ mod test_node {
     lazy_static! {
         static ref NUM_PEERS: usize = 5;
         static ref MAJORITY: usize = *NUM_PEERS / 2;
-        static ref GET_REQ: Request = Request::Get {
+        static ref GET_REQ: ApiRequest = ApiRequest::Get {
             key: "foo".to_string(),
         };
-        static ref PUT_REQ: Request = Request::Put {
+        static ref PUT_REQ: ApiRequest = ApiRequest::Put {
             key: "foo".to_string(),
             value: "bar".to_string(),
         };
-        static ref PUT_RESP: Response = Response::ToPut { was_modified: true };
-        static ref ERR_RESP: Response = Response::Error {
+        static ref PUT_RESP: ApiResponse = ApiResponse::ToPut { was_modified: true };
+        static ref ERR_RESP: ApiResponse = ApiResponse::Error {
             msg: "oh noes!".to_string()
         };
     }
@@ -162,7 +177,7 @@ mod test_node {
         client: Client,
     }
 
-    async fn setup_with(role: Role, responses: Vec<Response>) -> Runner {
+    async fn setup_with(role: Role, responses: Vec<ApiResponse>) -> Runner {
         let responses = Arc::new(responses);
         let peer_addresses: Vec<SocketAddr> = (0..*NUM_PEERS).map(|_| Gen::socket_addr()).collect();
 
@@ -182,7 +197,7 @@ mod test_node {
                             let req = conn.read().await.unwrap();
                             // println!("> Peer at {:?} got request: {:?}", peer_addr, req);
                             if !responses.is_empty() {
-                                let response = ResponseEnvelope {
+                                let response = ApiResponseEnvelope {
                                     id: req.id,
                                     body: responses[peer_idx].clone(),
                                 };
@@ -222,14 +237,14 @@ mod test_node {
 
         let response = client.write_one(&node_address, &GET_REQ).await.unwrap();
 
-        assert_eq!(response.body, Response::ToGet { value: None });
+        assert_eq!(response.body, ApiResponse::ToGet { value: None });
     }
 
     #[tokio::test]
     async fn leader_handles_successfully_replicated_put() {
         let responses = std::iter::repeat(PUT_RESP.clone())
             .take(*NUM_PEERS)
-            .collect::<Vec<Response>>();
+            .collect::<Vec<ApiResponse>>();
         let Runner {
             node_address,
             client,
@@ -238,14 +253,14 @@ mod test_node {
 
         let response = client.write_one(&node_address, &PUT_REQ).await.unwrap();
 
-        assert_eq!(response.body, Response::ToPut { was_modified: true });
+        assert_eq!(response.body, ApiResponse::ToPut { was_modified: true });
     }
 
     #[tokio::test]
     async fn leader_handles_unsuccessfully_replicated_put() {
         let responses = std::iter::repeat(ERR_RESP.clone())
             .take(*NUM_PEERS)
-            .collect::<Vec<Response>>();
+            .collect::<Vec<ApiResponse>>();
         let Runner {
             node_address,
             client,
@@ -257,11 +272,11 @@ mod test_node {
 
         assert_eq!(
             put_response.body,
-            Response::Error {
+            ApiResponse::Error {
                 msg: BroadcastFailure.to_string()
             }
         );
-        assert_eq!(get_response.body, Response::ToGet { value: None });
+        assert_eq!(get_response.body, ApiResponse::ToGet { value: None });
     }
 
     #[tokio::test]
@@ -276,7 +291,7 @@ mod test_node {
 
         assert_eq!(
             response.body,
-            Response::Error {
+            ApiResponse::Error {
                 msg: BroadcastFailure.to_string()
             }
         );
@@ -286,12 +301,12 @@ mod test_node {
     async fn leader_handles_get_of_put_value() {
         let responses = std::iter::repeat(PUT_RESP.clone())
             .take(*NUM_PEERS)
-            .collect::<Vec<Response>>();
-        let put_request = Request::Put {
+            .collect::<Vec<ApiResponse>>();
+        let put_request = ApiRequest::Put {
             key: "foo".to_string(),
             value: "bar".to_string(),
         };
-        let get_request = Request::Get {
+        let get_request = ApiRequest::Get {
             key: "foo".to_string(),
         };
         let Runner {
@@ -304,7 +319,7 @@ mod test_node {
         let get_response = client.write_one(&node_address, &get_request).await.unwrap();
         assert_eq!(
             get_response.body,
-            Response::ToGet {
+            ApiResponse::ToGet {
                 value: Some("bar".to_string())
             }
         );
@@ -314,8 +329,8 @@ mod test_node {
     async fn leader_handles_idempotent_puts() {
         let responses = std::iter::repeat(PUT_RESP.clone())
             .take(*NUM_PEERS)
-            .collect::<Vec<Response>>();
-        let put_request = Request::Put {
+            .collect::<Vec<ApiResponse>>();
+        let put_request = ApiRequest::Put {
             key: "foo".to_string(),
             value: "bar".to_string(),
         };
@@ -328,10 +343,13 @@ mod test_node {
         let put_response_1 = client.write_one(&node_address, &put_request).await.unwrap();
         let put_response_2 = client.write_one(&node_address, &put_request).await.unwrap();
 
-        assert_eq!(put_response_1.body, Response::ToPut { was_modified: true });
+        assert_eq!(
+            put_response_1.body,
+            ApiResponse::ToPut { was_modified: true }
+        );
         assert_eq!(
             put_response_2.body,
-            Response::ToPut {
+            ApiResponse::ToPut {
                 was_modified: false
             }
         );
@@ -341,16 +359,16 @@ mod test_node {
     async fn leader_handles_sequential_puts() {
         let responses = std::iter::repeat(PUT_RESP.clone())
             .take(*NUM_PEERS)
-            .collect::<Vec<Response>>();
-        let put_request_1 = Request::Put {
+            .collect::<Vec<ApiResponse>>();
+        let put_request_1 = ApiRequest::Put {
             key: "foo".to_string(),
             value: "bar".to_string(),
         };
-        let put_request_2 = Request::Put {
+        let put_request_2 = ApiRequest::Put {
             key: "foo".to_string(),
             value: "baz".to_string(),
         };
-        let get_request = Request::Get {
+        let get_request = ApiRequest::Get {
             key: "foo".to_string(),
         };
 
@@ -370,11 +388,17 @@ mod test_node {
             .unwrap();
         let get_response = client.write_one(&node_address, &get_request).await.unwrap();
 
-        assert_eq!(put_response_1.body, Response::ToPut { was_modified: true });
-        assert_eq!(put_response_2.body, Response::ToPut { was_modified: true });
+        assert_eq!(
+            put_response_1.body,
+            ApiResponse::ToPut { was_modified: true }
+        );
+        assert_eq!(
+            put_response_2.body,
+            ApiResponse::ToPut { was_modified: true }
+        );
         assert_eq!(
             get_response.body,
-            Response::ToGet {
+            ApiResponse::ToGet {
                 value: Some("baz".to_string()),
             }
         )
@@ -391,7 +415,7 @@ mod test_node {
         let get_response = client.write_one(&node_address, &GET_REQ).await.unwrap();
         assert_eq!(
             get_response.body,
-            Response::Error {
+            ApiResponse::Error {
                 msg: FollowersMayNotGet.to_string()
             }
         )
@@ -406,6 +430,6 @@ mod test_node {
         } = setup_with(Role::Follower, vec![]).await;
 
         let put_response = client.write_one(&node_address, &PUT_REQ).await.unwrap();
-        assert_eq!(put_response.body, Response::ToPut { was_modified: true });
+        assert_eq!(put_response.body, ApiResponse::ToPut { was_modified: true });
     }
 }

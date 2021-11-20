@@ -7,7 +7,7 @@ use std::fmt::Display;
 
 use err_derive::Error;
 
-use crate::api::request::RequestEnvelope;
+use crate::api::request::ApiRequestEnvelope;
 
 #[derive(Debug, Error)]
 pub enum NetworkError {

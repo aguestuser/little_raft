@@ -75,8 +75,8 @@ where
 
 #[cfg(test)]
 mod connection_tests {
-    use crate::api::request::{Request, RequestEnvelope};
-    use crate::api::response::{Response, ResponseEnvelope};
+    use crate::api::request::{ApiRequest, ApiRequestEnvelope};
+    use crate::api::response::{ApiResponse, ApiResponseEnvelope};
     use crate::api::{ClientConnection, ServerConnection};
 
     #[tokio::test]
@@ -84,9 +84,9 @@ mod connection_tests {
         let response_bytes: Vec<u8> = [r#"{"id":42,"body":{"type":"ToGet","value":"bar"}}"#, "\n"]
             .concat()
             .into();
-        let response = ResponseEnvelope {
+        let response = ApiResponseEnvelope {
             id: 42,
-            body: Response::ToGet {
+            body: ApiResponse::ToGet {
                 value: Some("bar".to_string()),
             },
         };
@@ -99,9 +99,9 @@ mod connection_tests {
 
     #[tokio::test]
     async fn client_writes() {
-        let request = RequestEnvelope {
+        let request = ApiRequestEnvelope {
             id: 42,
-            body: Request::Get {
+            body: ApiRequest::Get {
                 key: "foo".to_string(),
             },
         };
@@ -117,9 +117,9 @@ mod connection_tests {
 
     #[tokio::test]
     async fn server_reads() {
-        let request = RequestEnvelope {
+        let request = ApiRequestEnvelope {
             id: 42,
-            body: Request::Get {
+            body: ApiRequest::Get {
                 key: "foo".to_string(),
             },
         };
@@ -135,9 +135,9 @@ mod connection_tests {
 
     #[tokio::test]
     async fn server_writes() {
-        let response = ResponseEnvelope {
+        let response = ApiResponseEnvelope {
             id: 42,
-            body: Response::ToGet {
+            body: ApiResponse::ToGet {
                 value: Some("bar".to_string()),
             },
         };

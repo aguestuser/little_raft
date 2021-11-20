@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 use crate::api::client::ClientConfig;
-use crate::api::request::{Request, RequestEnvelope};
-use crate::api::response::{Response, ResponseEnvelope};
+use crate::api::request::{ApiRequest, ApiRequestEnvelope};
+use crate::api::response::{ApiResponse, ApiResponseEnvelope};
 use crate::api::server::ServerConfig;
 use rand::seq::SliceRandom;
 use rand::Rng;
@@ -43,17 +43,17 @@ impl Gen {
         SocketAddr::from(([127, 0, 0, 1], port))
     }
 
-    pub fn request_envelope() -> RequestEnvelope {
-        RequestEnvelope {
+    pub fn request_envelope() -> ApiRequestEnvelope {
+        ApiRequestEnvelope {
             id: Gen::u64(),
             body: Gen::request(),
         }
     }
 
-    pub fn request() -> Request {
+    pub fn request() -> ApiRequest {
         let requests = vec![
-            Request::Get { key: Gen::str() },
-            Request::Put {
+            ApiRequest::Get { key: Gen::str() },
+            ApiRequest::Put {
                 key: Gen::str(),
                 value: Gen::str(),
             },
@@ -61,34 +61,34 @@ impl Gen {
         requests.choose(&mut rand::thread_rng()).unwrap().clone()
     }
 
-    pub fn response_envelope() -> ResponseEnvelope {
-        ResponseEnvelope {
+    pub fn response_envelope() -> ApiResponseEnvelope {
+        ApiResponseEnvelope {
             id: Gen::u64(),
-            body: Response::ToGet {
+            body: ApiResponse::ToGet {
                 value: Some(Gen::str()),
             },
         }
     }
 
-    pub fn response() -> Response {
+    pub fn response() -> ApiResponse {
         let responses = vec![
-            Response::ToGet {
+            ApiResponse::ToGet {
                 value: Some(Gen::str()),
             },
-            Response::ToPut {
+            ApiResponse::ToPut {
                 was_modified: Gen::bool(),
             },
-            Response::Error { msg: Gen::str() },
+            ApiResponse::Error { msg: Gen::str() },
         ];
         responses.choose(&mut rand::thread_rng()).unwrap().clone()
     }
 
-    pub fn response_to(request: Request) -> Response {
+    pub fn response_to(request: ApiRequest) -> ApiResponse {
         match request {
-            Request::Get { .. } => Response::ToGet {
+            ApiRequest::Get { .. } => ApiResponse::ToGet {
                 value: Some(Gen::str()),
             },
-            Request::Put { .. } => Response::ToPut {
+            ApiRequest::Put { .. } => ApiResponse::ToPut {
                 was_modified: Gen::bool(),
             },
         }

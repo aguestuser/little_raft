@@ -1,5 +1,5 @@
-use crate::api::request::RequestEnvelope;
-use crate::api::response::ResponseEnvelope;
+use crate::api::request::ApiRequestEnvelope;
+use crate::api::response::ApiResponseEnvelope;
 use crate::tcp::connection::Connection;
 
 pub mod client;
@@ -9,5 +9,5 @@ pub mod server;
 
 pub const REQUEST_BUFFER_SIZE: usize = 16;
 
-pub type ClientConnection = Connection<ResponseEnvelope, RequestEnvelope>;
-pub type ServerConnection = Connection<RequestEnvelope, ResponseEnvelope>;
+pub type ClientConnection = Connection<ApiResponseEnvelope, ApiRequestEnvelope>;
+pub type ServerConnection = Connection<ApiRequestEnvelope, ApiResponseEnvelope>;
