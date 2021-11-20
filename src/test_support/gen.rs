@@ -1,8 +1,8 @@
 #![allow(dead_code)]
-use crate::rpc::client::ClientConfig;
-use crate::rpc::request::{Command, Request};
-use crate::rpc::response::{Outcome, Response};
-use crate::rpc::server::ServerConfig;
+use crate::api::client::ClientConfig;
+use crate::api::request::{Request, RequestEnvelope};
+use crate::api::response::{Response, ResponseEnvelope};
+use crate::api::server::ServerConfig;
 use rand::seq::SliceRandom;
 use rand::Rng;
 use std::net::SocketAddr;
@@ -43,55 +43,54 @@ impl Gen {
         SocketAddr::from(([127, 0, 0, 1], port))
     }
 
-    pub fn request() -> Request {
-        Request {
+    pub fn request_envelope() -> RequestEnvelope {
+        RequestEnvelope {
             id: Gen::u64(),
-            command: Gen::command(),
+            body: Gen::request(),
         }
     }
 
-    pub fn command() -> Command {
-        let commands = vec![
-            Command::Get { key: Gen::str() },
-            Command::Put {
+    pub fn request() -> Request {
+        let requests = vec![
+            Request::Get { key: Gen::str() },
+            Request::Put {
                 key: Gen::str(),
                 value: Gen::str(),
             },
         ];
-        commands.choose(&mut rand::thread_rng()).unwrap().clone()
+        requests.choose(&mut rand::thread_rng()).unwrap().clone()
     }
 
-    pub fn response() -> Response {
-        Response {
+    pub fn response_envelope() -> ResponseEnvelope {
+        ResponseEnvelope {
             id: Gen::u64(),
-            outcome: Outcome::OfGet {
+            body: Response::ToGet {
                 value: Some(Gen::str()),
             },
         }
     }
 
-    pub fn outcome() -> Outcome {
-        let outcomes = vec![
-            Outcome::OfGet {
+    pub fn response() -> Response {
+        let responses = vec![
+            Response::ToGet {
                 value: Some(Gen::str()),
             },
-            Outcome::OfPut {
+            Response::ToPut {
                 was_modified: Gen::bool(),
             },
-            Outcome::Error { msg: Gen::str() },
+            Response::Error { msg: Gen::str() },
         ];
-        outcomes.choose(&mut rand::thread_rng()).unwrap().clone()
+        responses.choose(&mut rand::thread_rng()).unwrap().clone()
     }
 
-    pub fn outcome_of(cmd: Command) -> Outcome {
-        match cmd {
-            Command::Get { .. } => Outcome::OfGet {
+    pub fn response_to(request: Request) -> Response {
+        match request {
+            Request::Get { .. } => Response::ToGet {
                 value: Some(Gen::str()),
             },
-            Command::Put { .. } => Outcome::OfPut {
+            Request::Put { .. } => Response::ToPut {
                 was_modified: Gen::bool(),
             },
-            _ => Outcome::Error { msg: Gen::str() },
         }
     }
 

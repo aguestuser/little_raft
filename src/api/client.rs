@@ -12,13 +12,13 @@ use tokio::sync::oneshot::Sender as OneShotSender;
 use tokio::time;
 use tokio::time::Duration;
 
+use crate::api::request::{Request, RequestEnvelope};
+use crate::api::response::ResponseEnvelope;
+use crate::api::ClientConnection;
 use crate::error::NetworkError::{
     BroadcastFailure, NoPeerAtAddress, PeerConnectionClosed, RequestTimeout, TaskJoinFailure,
 };
-use crate::error::{AsyncError, Result};
-use crate::rpc::connection::ClientConnection;
-use crate::rpc::request::{Command, Request};
-use crate::rpc::response::Response;
+use crate::{AsyncError, Result};
 
 #[cfg(not(test))]
 const BROADCAST_TIMEOUT_MILLIS: u64 = 1000;
@@ -32,7 +32,7 @@ const DM_TIMEOUT_MILLIS: u64 = 20;
 pub struct Client {
     peer_addresses: Vec<SocketAddr>,
     peers: DashMap<String, Peer>,
-    response_handlers: Arc<DashMap<u64, OneShotSender<Response>>>,
+    response_handlers: Arc<DashMap<u64, OneShotSender<ResponseEnvelope>>>,
     request_id: AtomicU64,
 }
 
@@ -61,7 +61,7 @@ impl Client {
 
     /// Atomically fetch and increment an id for request tagging (this enables us to tell
     /// which responses correspond to which requests while enabling the same underlying
-    /// command to be issued to multiple peers, each with a different id).
+    /// request to be issued to multiple peers, each with a different id).
     pub fn next_id(&self) -> u64 {
         self.request_id.fetch_add(1, Ordering::SeqCst)
     }
@@ -120,11 +120,11 @@ impl Client {
     /// and return an `Err`.
     async fn write(
         connection: Arc<ClientConnection>,
-        response_handlers: Arc<DashMap<u64, OneShotSender<Response>>>,
-        request: Request,
+        response_handlers: Arc<DashMap<u64, OneShotSender<ResponseEnvelope>>>,
+        request: RequestEnvelope,
         timeout_in_millis: u64,
-    ) -> Result<Response> {
-        let (response_tx, response_rx) = oneshot::channel::<Response>();
+    ) -> Result<ResponseEnvelope> {
+        let (response_tx, response_rx) = oneshot::channel::<ResponseEnvelope>();
         let _ = response_handlers.insert(request.id, response_tx);
         connection.write(request).await?;
 
@@ -138,17 +138,21 @@ impl Client {
         };
     }
 
-    /// Send a `command` to a single peer at a given `peer_address`, returning an `Err` if the
+    /// Send a `request` to a single peer at a given `peer_address`, returning an `Err` if the
     /// address is not registered with this client or if transmission fails, otherwise return
     /// the `Ok<Response>` returned by `Client::write`
-    pub async fn write_one(&self, peer_address: &String, command: &Command) -> Result<Response> {
+    pub async fn write_one(
+        &self,
+        peer_address: &String,
+        request: &Request,
+    ) -> Result<ResponseEnvelope> {
         if let Some(peer) = self.peers.get(peer_address) {
             Client::write(
                 peer.connection.clone(),
                 self.response_handlers.clone(),
-                Request {
+                RequestEnvelope {
                     id: self.next_id(),
-                    command: command.clone(),
+                    body: request.clone(),
                 },
                 DM_TIMEOUT_MILLIS,
             )
@@ -158,22 +162,22 @@ impl Client {
         }
     }
 
-    /// Broadcast a `command` to all peers in parallel, then wait for a majority of peers to reply
+    /// Broadcast a `request` to all peers in parallel, then wait for a majority of peers to reply
     /// with any response by delegating to `Client::broadcast_and_filter` with an always-true filter.
-    pub async fn broadcast(&self, command: Command) -> Result<Vec<Response>> {
-        self.broadcast_and_filter(command, |r| Some(r)).await
+    pub async fn broadcast(&self, request: Request) -> Result<Vec<ResponseEnvelope>> {
+        self.broadcast_and_filter(request, |r| Some(r)).await
     }
 
-    /// Broadcast a `command` to all peers in parallel, then wait for a majority of peers to reply with
+    /// Broadcast a `request` to all peers in parallel, then wait for a majority of peers to reply with
     /// a response that satisfies some `filter` predicate. If a majority of peers either fail to
     /// respond or respond in a manner that fails to satisfy the predicate, return an `Err` indicating
     /// the broadcast has failed. Otherwise, return a `Vec` of the successful responses as soon as they
     /// arrive from a majority of peers, without waiting for further responses from other peers.
     pub async fn broadcast_and_filter(
         &self,
-        command: Command,
-        filter: impl Fn(Response) -> Option<Response>,
-    ) -> Result<Vec<Response>> {
+        request: Request,
+        filter: impl Fn(ResponseEnvelope) -> Option<ResponseEnvelope>,
+    ) -> Result<Vec<ResponseEnvelope>> {
         let num_peers = self.peers.len();
         let majority = num_peers / 2;
 
@@ -187,11 +191,11 @@ impl Client {
             .map(|connection| {
                 let handlers = self.response_handlers.clone();
                 let id = self.next_id();
-                let command = command.clone();
+                let request = request.clone();
                 Client::write(
                     connection.clone(),
                     handlers,
-                    Request { id, command },
+                    RequestEnvelope { id, body: request },
                     BROADCAST_TIMEOUT_MILLIS,
                 )
             })
@@ -203,7 +207,7 @@ impl Client {
                     .map_or(None, |response| filter(response))
             })
             .take(majority)
-            .collect::<Vec<Response>>()
+            .collect::<Vec<ResponseEnvelope>>()
             .await;
 
         if successful_responses.len() < majority {
@@ -228,33 +232,30 @@ mod test_client {
     use tokio::sync::mpsc::Receiver;
     use tokio::sync::{mpsc, Mutex};
 
-    use crate::rpc::connection::ServerConnection;
-    use crate::rpc::request::Command;
-    use crate::rpc::response::Outcome;
+    use crate::api::request::Request;
+    use crate::api::response::Response;
+    use crate::api::ServerConnection;
+    use crate::error::NetworkError;
     use crate::test_support::gen::Gen;
 
     use super::*;
-    use crate::error::NetworkError;
 
     struct Runner {
         client_config: ClientConfig,
         peer_addresses: Vec<SocketAddr>,
         recipient_addresses: Vec<String>,
-        req_rx: Receiver<(SocketAddr, Request)>,
+        req_rx: Receiver<(SocketAddr, RequestEnvelope)>,
     }
 
     lazy_static! {
         static ref NUM_PEERS: usize = 5;
         static ref MAJORITY: usize = *NUM_PEERS / 2;
-        static ref GET_CMD: Command = Command::Get {
+        static ref GET_REQ: Request = Request::Get {
             key: "foo".to_string()
         };
-        static ref PUT_CMD: Command = Command::Put {
+        static ref PUT_REQ: Request = Request::Put {
             key: "foo".to_string(),
             value: "bar".to_string(),
-        };
-        static ref INVALID_CMD: Command = Command::Invalid {
-            msg: "foo".to_string(),
         };
     }
 
@@ -262,22 +263,22 @@ mod test_client {
         setup_with(Vec::new(), Vec::new()).await
     }
 
-    async fn setup_with_outcomes(outcomes: Vec<Outcome>) -> Runner {
-        setup_with(outcomes, Vec::new()).await
+    async fn setup_with_responses(responses: Vec<Response>) -> Runner {
+        setup_with(responses, Vec::new()).await
     }
 
-    async fn setup_with(outcomes: Vec<Outcome>, fuzzed_ids: Vec<u64>) -> Runner {
+    async fn setup_with(responses: Vec<Response>, fuzzed_ids: Vec<u64>) -> Runner {
         let buf_size = *NUM_PEERS;
-        let outcomes = Arc::new(outcomes);
+        let responses = Arc::new(responses);
         let fuzzed_ids = Arc::new(fuzzed_ids);
 
         let peer_addresses: Vec<SocketAddr> = (0..*NUM_PEERS).map(|_| Gen::socket_addr()).collect();
-        let (req_tx, req_rx) = mpsc::channel::<(SocketAddr, Request)>(buf_size);
+        let (req_tx, req_rx) = mpsc::channel::<(SocketAddr, RequestEnvelope)>(buf_size);
 
         for (peer_idx, peer_addr) in peer_addresses.clone().into_iter().enumerate() {
             let listener = TcpListener::bind(peer_addr).await.unwrap();
             let req_tx = req_tx.clone();
-            let outcomes = outcomes.clone();
+            let responses = responses.clone();
             let ids = fuzzed_ids.clone();
 
             tokio::spawn(async move {
@@ -286,7 +287,7 @@ mod test_client {
                     // println!("> Peer listening at {:?}", peer_addr);
 
                     let req_tx = req_tx.clone();
-                    let outcomes = outcomes.clone();
+                    let responses = responses.clone();
                     let fuzzed_ids = ids.clone();
 
                     tokio::spawn(async move {
@@ -297,15 +298,15 @@ mod test_client {
                             // report receipt of request to test harness receiver
                             req_tx.send((peer_addr, req.clone())).await.unwrap();
                             // send canned response provided by test harness to client
-                            if !outcomes.is_empty() {
-                                let response = Response {
+                            if !responses.is_empty() {
+                                let response = ResponseEnvelope {
                                     // respond with request id unless we have provided fuzzed ids
                                     id: if fuzzed_ids.is_empty() {
                                         req.id
                                     } else {
                                         fuzzed_ids[peer_idx]
                                     },
-                                    outcome: outcomes[peer_idx].clone(),
+                                    body: responses[peer_idx].clone(),
                                 };
                                 conn.write(response).await.unwrap();
                             }
@@ -381,32 +382,32 @@ mod test_client {
         let client = Client::new(client_config);
         client.run().await.unwrap();
 
-        let _ = client.write_one(&recipient_addresses[0], &*GET_CMD).await;
+        let _ = client.write_one(&recipient_addresses[0], &*GET_REQ).await;
         let (conn, received_msg) = req_rx.recv().await.unwrap();
 
         assert_eq!(conn, peer_addresses[0]);
-        assert_eq!(received_msg.command, *GET_CMD);
+        assert_eq!(received_msg.body, *GET_REQ);
     }
 
     #[tokio::test]
     async fn handles_response_from_a_peer() {
-        let outcomes = vec![Gen::outcome_of(GET_CMD.clone())];
+        let responses = vec![Gen::response_to(GET_REQ.clone())];
         let Runner {
             peer_addresses,
             client_config,
             req_rx,
             ..
-        } = setup_with_outcomes(outcomes.clone()).await;
+        } = setup_with_responses(responses.clone()).await;
 
         let client = Client::new(client_config);
         client.run().await.unwrap();
         let _ = req_rx; // if we don't reference req_rx in the test scope requests are not received
 
         let resp = client
-            .write_one(&peer_addresses[0].to_string(), &*GET_CMD)
+            .write_one(&peer_addresses[0].to_string(), &*GET_REQ)
             .await;
 
-        assert_eq!(resp.unwrap().outcome, outcomes[0]);
+        assert_eq!(resp.unwrap().body, responses[0]);
     }
 
     #[tokio::test]
@@ -416,13 +417,13 @@ mod test_client {
             client_config,
             mut req_rx,
             ..
-        } = setup_with(vec![Gen::outcome()], vec![Gen::u64()]).await;
+        } = setup_with(vec![Gen::response()], vec![Gen::u64()]).await;
 
         let client = Client::new(client_config);
         client.run().await.unwrap();
 
         let resp = client
-            .write_one(&peer_addresses[0].to_string(), &*GET_CMD)
+            .write_one(&peer_addresses[0].to_string(), &*GET_REQ)
             .await;
         let (_, _) = req_rx.recv().await.unwrap();
 
@@ -442,27 +443,27 @@ mod test_client {
         let a_req_rx = Arc::new(Mutex::new(req_rx));
         let client = Client::new(client_config);
         let _ = client.run().await.unwrap();
-        let _ = client.broadcast(GET_CMD.clone()).await;
+        let _ = client.broadcast(GET_REQ.clone()).await;
         let _ = req_rx;
 
         let (expected_receiving_peers, expected_received_requests) = (
             HashSet::from_iter(peer_addresses.into_iter()),
-            HashSet::from_iter((0..5).map(|id| Request {
+            HashSet::from_iter((0..5).map(|id| RequestEnvelope {
                 id,
-                command: GET_CMD.clone(),
+                body: GET_REQ.clone(),
             })),
         );
 
         let (actual_receiving_peers, actual_received_requests): (
             HashSet<SocketAddr>,
-            HashSet<Request>,
+            HashSet<RequestEnvelope>,
         ) = futures::stream::iter(0..5)
             .map(|_| {
                 let rx = a_req_rx.clone();
                 async move { rx.lock().await.recv().await.unwrap() }
             })
             .buffer_unordered(5)
-            .collect::<HashSet<(SocketAddr, Request)>>()
+            .collect::<HashSet<(SocketAddr, RequestEnvelope)>>()
             .await
             .into_iter()
             .unzip();
@@ -473,29 +474,29 @@ mod test_client {
 
     #[tokio::test]
     async fn handles_broadcast_response_from_majority_of_peers() {
-        let mocked_outcomes = std::iter::repeat(Gen::outcome_of(GET_CMD.clone()))
+        let mocked_responses = std::iter::repeat(Gen::response_to(GET_REQ.clone()))
             .take(*NUM_PEERS)
-            .collect::<Vec<Outcome>>();
+            .collect::<Vec<Response>>();
 
         let Runner {
             client_config,
             req_rx,
             ..
-        } = setup_with_outcomes(mocked_outcomes.clone()).await;
+        } = setup_with_responses(mocked_responses.clone()).await;
 
         let client = Client::new(client_config);
         let _ = client.run().await.unwrap();
         let _ = req_rx;
 
-        let outcomes: Vec<Outcome> = client
-            .broadcast(GET_CMD.clone())
+        let responses: Vec<Response> = client
+            .broadcast(GET_REQ.clone())
             .await
             .unwrap()
             .into_iter()
-            .map(|response| response.outcome)
+            .map(|response| response.body)
             .collect();
 
-        assert_eq!(outcomes, mocked_outcomes.clone()[0..*MAJORITY],);
+        assert_eq!(responses, mocked_responses.clone()[0..*MAJORITY],);
     }
 
     #[tokio::test]
@@ -510,7 +511,7 @@ mod test_client {
         let _ = client.run().await.unwrap();
         let _ = req_rx;
 
-        let result = client.broadcast(GET_CMD.clone()).await;
+        let result = client.broadcast(GET_REQ.clone()).await;
         assert_eq!(
             result.err().unwrap().to_string(),
             NetworkError::BroadcastFailure.to_string(),
@@ -519,11 +520,11 @@ mod test_client {
 
     #[tokio::test]
     async fn filters_broadcast_responses_by_predicate() {
-        let get_outcome = Gen::outcome_of(GET_CMD.clone());
-        let err_outcome = Outcome::Error {
+        let get_outcome = Gen::response_to(GET_REQ.clone());
+        let err_outcome = Response::Error {
             msg: "foo".to_string(),
         };
-        let mocked_outcomes = (0..*NUM_PEERS)
+        let mocked_responses = (0..*NUM_PEERS)
             .map(|n| {
                 if n > 0 {
                     err_outcome.clone()
@@ -537,17 +538,17 @@ mod test_client {
             client_config,
             req_rx,
             ..
-        } = setup_with_outcomes(mocked_outcomes.clone()).await;
+        } = setup_with_responses(mocked_responses.clone()).await;
 
         let client = Client::new(client_config);
         let _ = client.run().await.unwrap();
         let _ = req_rx;
-        let filter = |resp: Response| match resp.outcome {
-            Outcome::OfGet { .. } => Some(resp),
+        let filter = |env: ResponseEnvelope| match env.body {
+            Response::ToGet { .. } => Some(env),
             _ => None,
         };
 
-        let result = client.broadcast_and_filter(GET_CMD.clone(), filter).await;
+        let result = client.broadcast_and_filter(GET_REQ.clone(), filter).await;
 
         assert_eq!(
             result.err().unwrap().to_string(),

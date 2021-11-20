@@ -1,13 +1,16 @@
+use std::convert::{TryFrom, TryInto};
+use std::marker::PhantomData;
+
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, BufWriter};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
-
-use crate::error::Result;
-use crate::rpc::request::Request;
-use crate::rpc::response::Response;
-use crate::NEWLINE;
-use std::marker::PhantomData;
 use tokio::sync::Mutex;
+
+use crate::error::NetworkError::MessageDeserializationError;
+use crate::AsyncError;
+use crate::Result;
+use crate::NEWLINE;
+use std::fmt::Display;
 
 pub trait AsyncReader: AsyncRead + Unpin + Send {}
 impl AsyncReader for OwnedReadHalf {}
@@ -15,24 +18,24 @@ impl AsyncReader for OwnedReadHalf {}
 pub trait AsyncWriter: AsyncWrite + Unpin + Send {}
 impl AsyncWriter for OwnedWriteHalf {}
 
-pub struct Connection<InputFrame, OutputFrame>
+pub struct Connection<I, O>
 where
-    InputFrame: From<Vec<u8>>,
-    OutputFrame: Into<Vec<u8>>,
+    I: TryFrom<Vec<u8>>,
+    O: Into<Vec<u8>>,
 {
     pub input: Mutex<BufReader<Box<dyn AsyncReader>>>,
     pub output: Mutex<BufWriter<Box<dyn AsyncWriter>>>,
-    pub input_frame: PhantomData<InputFrame>,
-    pub output_frame: PhantomData<OutputFrame>,
+    pub input_frame: PhantomData<I>,
+    pub output_frame: PhantomData<O>,
 }
 
-impl<InputFrame, OutputFrame> Connection<InputFrame, OutputFrame>
+impl<I, O> Connection<I, O>
 where
-    InputFrame: From<Vec<u8>>,
-    OutputFrame: Into<Vec<u8>>,
+    I: TryFrom<Vec<u8>>,
+    O: Into<Vec<u8>>,
 {
     /// Create a new `Connection` backed by `socket`, with read and write buffers initialized.
-    pub fn new(socket: TcpStream) -> Connection<InputFrame, OutputFrame> {
+    pub fn new(socket: TcpStream) -> Connection<I, O> {
         let (r, w) = socket.into_split();
         let input = Mutex::new(BufReader::new(Box::new(r) as Box<dyn AsyncReader>));
         let output = Mutex::new(BufWriter::new(Box::new(w) as Box<dyn AsyncWriter>));
@@ -44,21 +47,21 @@ where
         }
     }
 
-    /// Read a `Request` or `Response` from the socket
-    pub async fn read(&self) -> Result<InputFrame> {
-        // TODO: use a Cursor<BytesMut> here instead of a Vec<u8> for buf?
-        //  (will require manually impl of `read_until`)
+    /// Read a `RequestEnvelope` or `ResponseEnvelope` from the socket
+    pub async fn read(&self) -> Result<I>
+    where
+        <I as TryFrom<Vec<u8>>>::Error: Display,
+    {
         let mut buf = Vec::new();
-
         let mut input = self.input.lock().await;
         input.read_until(NEWLINE, &mut buf).await?;
-        let frame: InputFrame = buf.into();
-
-        Ok(frame)
+        buf.try_into().map_err(|e: <I as TryFrom<Vec<u8>>>::Error| {
+            Box::new(MessageDeserializationError(e.to_string())) as AsyncError
+        })
     }
 
-    /// Write a `Request` or `Response` to the socket
-    pub async fn write(&self, frame: OutputFrame) -> Result<()> {
+    /// Write a `RequestEnvelope` or `ResponseEnvelope` to the socket
+    pub async fn write(&self, frame: O) -> Result<()> {
         let bytes: Vec<u8> = frame.into();
 
         let mut output = self.output.lock().await;
@@ -70,28 +73,20 @@ where
     }
 }
 
-pub type ClientConnection = Connection<Response, Request>;
-pub type ServerConnection = Connection<Request, Response>;
-
 #[cfg(test)]
 mod connection_tests {
-    use crate::rpc::connection::ClientConnection;
-
-    use super::*;
-    use crate::rpc::request::Command;
-    use crate::rpc::response::Outcome;
+    use crate::api::request::{Request, RequestEnvelope};
+    use crate::api::response::{Response, ResponseEnvelope};
+    use crate::api::{ClientConnection, ServerConnection};
 
     #[tokio::test]
     async fn client_reads() {
-        let response_bytes: Vec<u8> = [
-            r#"{"id":42,"outcome":{"type":"OfGet","value":"bar"}}"#,
-            "\n",
-        ]
-        .concat()
-        .into();
-        let response = Response {
+        let response_bytes: Vec<u8> = [r#"{"id":42,"body":{"type":"ToGet","value":"bar"}}"#, "\n"]
+            .concat()
+            .into();
+        let response = ResponseEnvelope {
             id: 42,
-            outcome: Outcome::OfGet {
+            body: Response::ToGet {
                 value: Some("bar".to_string()),
             },
         };
@@ -104,13 +99,13 @@ mod connection_tests {
 
     #[tokio::test]
     async fn client_writes() {
-        let request = Request {
+        let request = RequestEnvelope {
             id: 42,
-            command: Command::Get {
+            body: Request::Get {
                 key: "foo".to_string(),
             },
         };
-        let request_bytes: Vec<u8> = [r#"{"id":42,"command":{"type":"Get","key":"foo"}}"#, "\n"]
+        let request_bytes: Vec<u8> = [r#"{"id":42,"body":{"type":"Get","key":"foo"}}"#, "\n"]
             .concat()
             .into();
 
@@ -122,13 +117,13 @@ mod connection_tests {
 
     #[tokio::test]
     async fn server_reads() {
-        let request = Request {
+        let request = RequestEnvelope {
             id: 42,
-            command: Command::Get {
+            body: Request::Get {
                 key: "foo".to_string(),
             },
         };
-        let request_bytes: Vec<u8> = [r#"{"id":42,"command":{"type":"Get","key":"foo"}}"#, "\n"]
+        let request_bytes: Vec<u8> = [r#"{"id":42,"body":{"type":"Get","key":"foo"}}"#, "\n"]
             .concat()
             .into();
 
@@ -140,18 +135,15 @@ mod connection_tests {
 
     #[tokio::test]
     async fn server_writes() {
-        let response = Response {
+        let response = ResponseEnvelope {
             id: 42,
-            outcome: Outcome::OfGet {
+            body: Response::ToGet {
                 value: Some("bar".to_string()),
             },
         };
-        let response_bytes: Vec<u8> = [
-            r#"{"id":42,"outcome":{"type":"OfGet","value":"bar"}}"#,
-            "\n",
-        ]
-        .concat()
-        .into();
+        let response_bytes: Vec<u8> = [r#"{"id":42,"body":{"type":"ToGet","value":"bar"}}"#, "\n"]
+            .concat()
+            .into();
 
         let (connection, _, output_receiver) = ServerConnection::with_channel();
         let _ = connection.write(response).await;

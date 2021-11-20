@@ -5,11 +5,9 @@ use std::error::Error;
 #[cfg(not(feature = "std"))]
 use std::fmt::Display;
 
-use crate::rpc::request::Request;
 use err_derive::Error;
 
-pub type AsyncError = Box<dyn std::error::Error + Send + Sync>;
-pub type Result<T> = std::result::Result<T, AsyncError>;
+use crate::api::request::RequestEnvelope;
 
 #[derive(Debug, Error)]
 pub enum NetworkError {
@@ -23,11 +21,13 @@ pub enum NetworkError {
     BroadcastFailure,
     #[error(display = "parallel requests failed to join")]
     TaskJoinFailure,
+    #[error(display = "failed to deserialize message from wire: {:?}", _0)]
+    MessageDeserializationError(String),
 }
 
 #[derive(Debug, Error)]
 pub enum PermissionError {
-    #[error(display = "followers are not permitted to issue Get commands")]
+    #[error(display = "followers are not permitted to issue Get requests")]
     FollowersMayNotGet,
 }
 

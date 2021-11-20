@@ -6,14 +6,15 @@ use std::sync::mpsc::{Receiver, Sender};
 use futures::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, BufReader, BufWriter, ReadBuf};
 
-use crate::rpc::connection::Connection;
-use crate::rpc::connection::{AsyncReader, AsyncWriter};
+use crate::tcp::connection::Connection;
+use crate::tcp::connection::{AsyncReader, AsyncWriter};
+use std::convert::TryFrom;
 use std::marker::PhantomData;
 use tokio::sync::Mutex;
 
 impl<I, O> Connection<I, O>
 where
-    I: From<Vec<u8>>,
+    I: TryFrom<Vec<u8>>,
     O: Into<Vec<u8>>,
 {
     pub fn with_channel() -> (Connection<I, O>, Sender<Vec<u8>>, Receiver<Vec<u8>>) {

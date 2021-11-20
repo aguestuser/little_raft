@@ -6,8 +6,7 @@ use tokio_stream::wrappers::LinesStream;
 use tokio_stream::StreamExt;
 
 use crate::error::PersistenceError::{LogDeserializationError, RemoveFromEmptyLogError};
-use crate::error::{AsyncError, Result};
-use crate::NEWLINE;
+use crate::{AsyncError, Result, NEWLINE};
 
 #[derive(Clone, Eq, PartialEq, Debug, Deserialize, Serialize, Hash)]
 pub struct LogEntry {

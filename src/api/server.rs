@@ -6,17 +6,17 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::oneshot::Sender as OneShotSender;
 use tokio::sync::{mpsc, oneshot, Mutex};
 
-use crate::error::Result;
-use crate::rpc::connection::ServerConnection;
-use crate::rpc::request::Request;
-use crate::rpc::response::Response;
-use crate::rpc::REQUEST_BUFFER_SIZE;
+use crate::api::request::RequestEnvelope;
+use crate::api::response::{Response, ResponseEnvelope};
+use crate::api::ServerConnection;
+use crate::api::REQUEST_BUFFER_SIZE;
+use crate::Result;
 
 pub struct Server {
     address: SocketAddr,
     tcp_listener: Option<Arc<TcpListener>>,
-    request_sender: Sender<(Request, Responder)>,
-    pub request_receiver: Arc<Mutex<Receiver<(Request, Responder)>>>,
+    request_sender: Sender<(RequestEnvelope, Responder)>,
+    pub request_receiver: Arc<Mutex<Receiver<(RequestEnvelope, Responder)>>>,
 }
 
 #[derive(Clone)]
@@ -24,12 +24,12 @@ pub struct ServerConfig {
     pub address: SocketAddr,
 }
 
-type Responder = OneShotSender<Response>;
+type Responder = OneShotSender<ResponseEnvelope>;
 
 impl Server {
     pub fn new(cfg: ServerConfig) -> Server {
         let (request_sender, request_receiver) =
-            mpsc::channel::<(Request, Responder)>(REQUEST_BUFFER_SIZE);
+            mpsc::channel::<(RequestEnvelope, Responder)>(REQUEST_BUFFER_SIZE);
         Self {
             address: cfg.address,
             tcp_listener: Option::None,
@@ -69,27 +69,30 @@ impl Server {
     /// Process data from a socket connection
     async fn handle_messages(
         socket: TcpStream,
-        request_tx: Sender<(Request, OneShotSender<Response>)>,
+        request_tx: Sender<(RequestEnvelope, OneShotSender<ResponseEnvelope>)>,
     ) {
         let connection = Arc::new(ServerConnection::new(socket));
 
         tokio::spawn(async move {
             loop {
-                let (response_tx, response_rx) = oneshot::channel::<Response>();
+                let (response_tx, response_rx) = oneshot::channel::<ResponseEnvelope>();
 
                 match connection.read().await {
                     Ok(req) => {
                         let _ = request_tx.send((req, response_tx)).await;
                     }
                     Err(e) => {
-                        // TODO: bubble up?
                         eprintln!("ERROR reading request: {}", e.to_string());
+                        let _ = response_tx.send(ResponseEnvelope {
+                            id: u64::MAX,
+                            body: Response::Error { msg: e.to_string() },
+                        });
                     }
                 }
 
                 let write_connection = connection.clone();
                 tokio::spawn(async move {
-                    // TODO: insert timeout here
+                    // TODO: insert timeout here?
                     if let Ok(response) = response_rx.await {
                         let _ = write_connection.write(response).await;
                     }
@@ -108,6 +111,7 @@ mod server_tests {
     use crate::NEWLINE;
 
     use super::*;
+    use std::prelude::rust_2021::TryInto;
 
     lazy_static! {
         static ref BUF_SIZE: usize = 10;
@@ -153,13 +157,13 @@ mod server_tests {
             ..
         } = setup().await;
 
-        let request_bytes: Vec<u8> = Gen::request().into();
+        let request_bytes: Vec<u8> = Gen::request_envelope().into();
         let client_write = [request_bytes.clone().as_slice(), b"\n"].concat();
 
         client_writer.write_all(&*client_write).await.unwrap();
         client_writer.flush().await.unwrap();
 
-        let expected_request: Request = request_bytes.into();
+        let expected_request: RequestEnvelope = request_bytes.try_into().unwrap();
         let (actual_request, _) = server.request_receiver.lock().await.recv().await.unwrap();
         assert_eq!(expected_request, actual_request);
     }
@@ -172,13 +176,13 @@ mod server_tests {
             mut client_writer,
         } = setup().await;
 
-        let request_bytes: Vec<u8> = Gen::request().into();
+        let request_bytes: Vec<u8> = Gen::request_envelope().into();
         let client_write = [request_bytes.clone().as_slice(), b"\n"].concat();
 
         client_writer.write_all(&*client_write).await.unwrap();
         client_writer.flush().await.unwrap();
 
-        let response = Gen::response();
+        let response = Gen::response_envelope();
         let response_bytes: Vec<u8> = response.clone().into();
         let (_, responder) = server.request_receiver.lock().await.recv().await.unwrap();
         let _ = responder.send(response).unwrap();
