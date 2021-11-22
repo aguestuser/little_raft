@@ -46,13 +46,12 @@ impl Node {
     }
 
     pub async fn run(&mut self) -> Result<()> {
-        let _ = self.server.run().await;
+        let mut request_rx = self.server.run().await?;
         let _ = self.client.run().await?;
 
         let role = self.role.clone();
         let store = self.store.clone();
-        let request_receiver = self.server.request_receiver.clone();
-        let a_client = self.client.clone();
+        let client = self.client.clone();
 
         /********
          * TODO:
@@ -70,17 +69,17 @@ impl Node {
          *******/
 
         tokio::spawn(async move {
-            while let Some((envelope, responder)) = request_receiver.lock().await.recv().await {
+            while let Some((envelope, responder)) = request_rx.recv().await {
                 let ApiRequestEnvelope { id, body: request } = envelope;
 
                 let role = role.clone();
                 let store = store.clone();
-                let a_client = a_client.clone();
+                let client = client.clone();
 
                 let response: ApiResponseEnvelope = match request {
                     Get { key } => Node::handle_get(role, store, id, key).await,
                     Put { key, value } => {
-                        Node::handle_set(role, store, a_client, id, key, value).await
+                        Node::handle_set(role, store, client, id, key, value).await
                     }
                 };
                 let _ = responder.send(response)?;

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::oneshot::Sender as OneShotSender;
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{mpsc, oneshot};
 
 use crate::api::request::ApiRequestEnvelope;
 use crate::api::response::{ApiResponse, ApiResponseEnvelope};
@@ -15,8 +15,6 @@ use crate::Result;
 pub struct Server {
     address: SocketAddr,
     tcp_listener: Option<Arc<TcpListener>>,
-    request_sender: Sender<(ApiRequestEnvelope, Responder)>,
-    pub request_receiver: Arc<Mutex<Receiver<(ApiRequestEnvelope, Responder)>>>,
 }
 
 #[derive(Clone)]
@@ -28,43 +26,35 @@ type Responder = OneShotSender<ApiResponseEnvelope>;
 
 impl Server {
     pub fn new(cfg: ServerConfig) -> Server {
-        let (request_sender, request_receiver) =
-            mpsc::channel::<(ApiRequestEnvelope, Responder)>(REQUEST_BUFFER_SIZE);
         Self {
             address: cfg.address,
             tcp_listener: Option::None,
-            request_sender,
-            request_receiver: Arc::new(Mutex::new(request_receiver)),
         }
     }
 
-    pub async fn run(&mut self) -> Result<()> {
+    pub async fn run(&mut self) -> Result<Receiver<(ApiRequestEnvelope, Responder)>> {
         let tcp_listener_arc = Arc::new(TcpListener::bind(&self.address).await.unwrap());
         let tcp_listener = tcp_listener_arc.clone();
         self.tcp_listener = Some(tcp_listener_arc);
         println!("> Listening on {:?}", &self.address);
 
-        let request_sender = self.request_sender.clone();
+        let (request_sender, request_receiver) =
+            mpsc::channel::<(ApiRequestEnvelope, Responder)>(REQUEST_BUFFER_SIZE);
+
         tokio::spawn(async move {
             // TODO: use select here to insert kill switch for shutdown
             loop {
                 let (socket, client_addr) = tcp_listener.accept().await.unwrap();
                 println!("> Got connection on {}", &client_addr);
                 let request_sender = request_sender.clone();
-                tokio::spawn(async move { Server::handle_messages(socket, request_sender).await });
+                tokio::spawn(async move {
+                    Server::handle_messages(socket, request_sender.clone()).await
+                });
             }
         });
 
-        Ok(())
+        Ok(request_receiver)
     }
-
-    // async fn stop(&self) {
-    // TODO: shut down gracefully
-    //  - strategy: pass a poison pill to main loop (which should become a select)!
-    //  - leverages cancel safety: https://docs.rs/tokio/1.12.0/tokio/net/struct.TcpListener.html#cancel-safety
-    //  - see: https://docs.rs/tokio/1.12.0/tokio/macro.select.html
-    //  - and: https://stackoverflow.com/questions/48334079/is-it-possible-to-close-a-tcplistener-in-tokio
-    //}
 
     /// Process data from a socket connection
     async fn handle_messages(
@@ -82,9 +72,8 @@ impl Server {
                         let _ = request_tx.send((req, response_tx)).await;
                     }
                     Err(e) => {
-                        eprintln!("ERROR reading request: {}", e.to_string());
                         let _ = response_tx.send(ApiResponseEnvelope {
-                            id: u64::MAX,
+                            id: 0,
                             body: ApiResponse::Error { msg: e.to_string() },
                         });
                     }
@@ -100,6 +89,14 @@ impl Server {
             }
         });
     }
+
+    // async fn stop(&self) {
+    // TODO: shut down gracefully
+    //  - strategy: pass a poison pill to loop spawned in `run()` (which should become a select)!
+    //  - leverages cancel safety: https://docs.rs/tokio/1.12.0/tokio/net/struct.TcpListener.html#cancel-safety
+    //  - see: https://docs.rs/tokio/1.12.0/tokio/macro.select.html
+    //  - and: https://stackoverflow.com/questions/48334079/is-it-possible-to-close-a-tcplistener-in-tokio
+    //}
 }
 
 #[cfg(test)]
@@ -118,16 +115,15 @@ mod server_tests {
     }
 
     struct Runner {
-        server: Server,
+        request_receiver: Receiver<(ApiRequestEnvelope, Responder)>,
         client_reader: BufReader<OwnedReadHalf>,
         client_writer: BufWriter<OwnedWriteHalf>,
     }
 
     async fn setup() -> Runner {
         let address = Gen::socket_addr();
-        // TODO: return this when testing Server#stop()
         let mut server = Server::new(ServerConfig { address });
-        let _ = server.run().await;
+        let request_receiver = server.run().await.unwrap();
 
         let (client_reader, client_writer) =
             match TcpStream::connect(address).await.unwrap().into_split() {
@@ -135,7 +131,7 @@ mod server_tests {
             };
 
         Runner {
-            server,
+            request_receiver,
             client_reader,
             client_writer,
         }
@@ -152,7 +148,7 @@ mod server_tests {
     #[tokio::test]
     async fn listens_for_requests_from_client_and_puts_them_on_channel() {
         let Runner {
-            server,
+            mut request_receiver,
             mut client_writer,
             ..
         } = setup().await;
@@ -164,14 +160,14 @@ mod server_tests {
         client_writer.flush().await.unwrap();
 
         let expected_request: ApiRequestEnvelope = request_bytes.try_into().unwrap();
-        let (actual_request, _) = server.request_receiver.lock().await.recv().await.unwrap();
+        let (actual_request, _) = request_receiver.recv().await.unwrap();
         assert_eq!(expected_request, actual_request);
     }
 
     #[tokio::test]
     async fn listens_for_responses_on_channel_and_writes_them_to_client() {
         let Runner {
-            server,
+            mut request_receiver,
             mut client_reader,
             mut client_writer,
         } = setup().await;
@@ -184,7 +180,7 @@ mod server_tests {
 
         let response = Gen::response_envelope();
         let response_bytes: Vec<u8> = response.clone().into();
-        let (_, responder) = server.request_receiver.lock().await.recv().await.unwrap();
+        let (_, responder) = request_receiver.recv().await.unwrap();
         let _ = responder.send(response).unwrap();
 
         let expected_client_read = [response_bytes, vec![NEWLINE]].concat();
