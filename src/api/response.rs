@@ -15,7 +15,19 @@ pub struct ApiResponseEnvelope {
 pub enum ApiResponse {
     ToGet { value: Option<String> },
     ToPut { was_modified: bool },
-    Error { msg: String },
+    Redirect { leader_address: String },
+    ServerError { msg: String },
+}
+
+impl ApiResponse {
+    pub fn display_type(&self) -> String {
+        match self {
+            ApiResponse::ToGet { .. } => "ToGet".to_string(),
+            ApiResponse::ToPut { .. } => "ToPut".to_string(),
+            ApiResponse::Redirect { .. } => "Redirect".to_string(),
+            ApiResponse::ServerError { .. } => "ServerError".to_string(),
+        }
+    }
 }
 
 impl Into<Vec<u8>> for ApiResponseEnvelope {
@@ -31,11 +43,24 @@ impl TryFrom<Vec<u8>> for ApiResponseEnvelope {
     }
 }
 
+impl Into<Vec<u8>> for ApiResponse {
+    fn into(self) -> Vec<u8> {
+        serde_json::to_vec(&self).unwrap()
+    }
+}
+
+impl TryFrom<Vec<u8>> for ApiResponse {
+    type Error = serde_json::Error;
+    fn try_from(bs: Vec<u8>) -> StdResult<ApiResponse, Self::Error> {
+        serde_json::from_slice(&bs)
+    }
+}
+
 impl ApiResponseEnvelope {
     pub fn error_of(id: u64, msg: String) -> ApiResponseEnvelope {
         ApiResponseEnvelope {
             id,
-            body: ApiResponse::Error { msg },
+            body: ApiResponse::ServerError { msg },
         }
     }
     pub fn of_get(id: u64, value: Option<String>) -> ApiResponseEnvelope {
@@ -44,12 +69,19 @@ impl ApiResponseEnvelope {
             body: { ApiResponse::ToGet { value } },
         }
     }
-    pub fn of_set(id: u64, was_modified: bool) -> ApiResponseEnvelope {
+    pub fn of_put(id: u64, was_modified: bool) -> ApiResponseEnvelope {
         ApiResponseEnvelope {
             id,
             body: { ApiResponse::ToPut { was_modified } },
         }
     }
+    pub fn of_redirect(id: u64, leader_address: String) -> ApiResponseEnvelope {
+        ApiResponseEnvelope {
+            id,
+            body: { ApiResponse::Redirect { leader_address } },
+        }
+    }
+
     pub(crate) fn id(&self) -> u64 {
         self.id
     }
@@ -84,6 +116,8 @@ mod response_tests {
             },
         }
         .into();
+        let actual_str = String::from_utf8(actual.clone()).unwrap();
+        println!("actual_str: {:?}", actual_str);
 
         assert_eq!(actual, expected);
     }
@@ -114,10 +148,10 @@ mod response_tests {
 
     #[test]
     fn serializing_error_response() {
-        let expected: Vec<u8> = r#"{"id":42,"body":{"type":"Error","msg":"whoops!"}}"#.into();
+        let expected: Vec<u8> = r#"{"id":42,"body":{"type":"ServerError","msg":"whoops!"}}"#.into();
         let actual: Vec<u8> = ApiResponseEnvelope {
             id: 42,
-            body: ApiResponse::Error {
+            body: ApiResponse::ServerError {
                 msg: "whoops!".to_string(),
             },
         }

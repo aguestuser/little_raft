@@ -7,7 +7,5 @@ pub mod request;
 pub mod response;
 pub mod server;
 
-pub const REQUEST_BUFFER_SIZE: usize = 16;
-
-pub type ClientConnection = Connection<ApiResponseEnvelope, ApiRequestEnvelope>;
-pub type ServerConnection = Connection<ApiRequestEnvelope, ApiResponseEnvelope>;
+pub type ApiClientConnection = Connection<ApiResponseEnvelope, ApiRequestEnvelope>;
+pub type ApiServerConnection = Connection<ApiRequestEnvelope, ApiResponseEnvelope>;

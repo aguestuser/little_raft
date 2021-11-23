@@ -1,8 +1,11 @@
 #![allow(dead_code)]
-use crate::api::client::ClientConfig;
-use crate::api::request::{ApiRequest, ApiRequestEnvelope};
+use crate::api::client::ApiClientConfig;
+use crate::api::request::ApiRequest;
 use crate::api::response::{ApiResponse, ApiResponseEnvelope};
-use crate::api::server::ServerConfig;
+use crate::rpc_legacy::client::RpcClientConfig;
+use crate::rpc_legacy::request::{RpcRequest, RpcRequestEnvelope};
+use crate::rpc_legacy::response::{RpcResponse, RpcResponseEnvelope};
+use crate::tcp::ServerConfig;
 use rand::seq::SliceRandom;
 use rand::Rng;
 use std::net::SocketAddr;
@@ -43,34 +46,29 @@ impl Gen {
         SocketAddr::from(([127, 0, 0, 1], port))
     }
 
-    pub fn request_envelope() -> ApiRequestEnvelope {
-        ApiRequestEnvelope {
+    pub fn request_envelope() -> RpcRequestEnvelope {
+        RpcRequestEnvelope {
             id: Gen::u64(),
             body: Gen::request(),
         }
     }
 
-    pub fn request() -> ApiRequest {
-        let requests = vec![
-            ApiRequest::Get { key: Gen::str() },
-            ApiRequest::Put {
-                key: Gen::str(),
-                value: Gen::str(),
-            },
-        ];
+    pub fn request() -> RpcRequest {
+        let requests = vec![RpcRequest::Put {
+            key: Gen::str(),
+            value: Gen::str(),
+        }];
         requests.choose(&mut rand::thread_rng()).unwrap().clone()
     }
 
-    pub fn response_envelope() -> ApiResponseEnvelope {
+    pub fn api_response_envelope() -> ApiResponseEnvelope {
         ApiResponseEnvelope {
             id: Gen::u64(),
-            body: ApiResponse::ToGet {
-                value: Some(Gen::str()),
-            },
+            body: Gen::api_response(),
         }
     }
 
-    pub fn response() -> ApiResponse {
+    pub fn api_response() -> ApiResponse {
         let responses = vec![
             ApiResponse::ToGet {
                 value: Some(Gen::str()),
@@ -78,17 +76,42 @@ impl Gen {
             ApiResponse::ToPut {
                 was_modified: Gen::bool(),
             },
-            ApiResponse::Error { msg: Gen::str() },
+            ApiResponse::ServerError { msg: Gen::str() },
         ];
         responses.choose(&mut rand::thread_rng()).unwrap().clone()
     }
 
-    pub fn response_to(request: ApiRequest) -> ApiResponse {
-        match request {
+    pub fn api_response_to(req: ApiRequest) -> ApiResponse {
+        match req {
             ApiRequest::Get { .. } => ApiResponse::ToGet {
                 value: Some(Gen::str()),
             },
             ApiRequest::Put { .. } => ApiResponse::ToPut {
+                was_modified: Gen::bool(),
+            },
+        }
+    }
+
+    pub fn rpc_response_envelope() -> RpcResponseEnvelope {
+        RpcResponseEnvelope {
+            id: Gen::u64(),
+            body: Gen::rpc_response(),
+        }
+    }
+
+    pub fn rpc_response() -> RpcResponse {
+        let responses = vec![
+            RpcResponse::ToPut {
+                was_modified: Gen::bool(),
+            },
+            RpcResponse::ServerError { msg: Gen::str() },
+        ];
+        responses.choose(&mut rand::thread_rng()).unwrap().clone()
+    }
+
+    pub fn rpc_response_to(request: RpcRequest) -> RpcResponse {
+        match request {
+            RpcRequest::Put { .. } => RpcResponse::ToPut {
                 was_modified: Gen::bool(),
             },
         }
@@ -100,8 +123,13 @@ impl Gen {
         }
     }
 
-    pub fn client_config() -> ClientConfig {
-        ClientConfig {
+    pub fn api_client_config() -> ApiClientConfig {
+        ApiClientConfig {
+            server_address: Gen::socket_addr(),
+        }
+    }
+    pub fn rpc_client_config() -> RpcClientConfig {
+        RpcClientConfig {
             peer_addresses: vec![Gen::socket_addr(), Gen::socket_addr(), Gen::socket_addr()],
         }
     }

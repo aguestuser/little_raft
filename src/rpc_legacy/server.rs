@@ -6,35 +6,35 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::oneshot::Sender as OneShotSender;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::api::request::ApiRequestEnvelope;
-use crate::api::response::{ApiResponse, ApiResponseEnvelope};
-use crate::api::ApiServerConnection;
 use crate::error::Result;
+use crate::rpc_legacy::request::RpcRequestEnvelope;
+use crate::rpc_legacy::response::{RpcResponse, RpcResponseEnvelope};
+use crate::rpc_legacy::RpcServerConnection;
 use crate::tcp::{ServerConfig, REQUEST_BUFFER_SIZE};
 
-pub struct ApiServer {
-    pub address: SocketAddr,
+pub struct RpcServer {
+    address: SocketAddr,
     tcp_listener: Option<Arc<TcpListener>>,
 }
 
-type ApiResponder = OneShotSender<ApiResponseEnvelope>;
+type RpcResponder = OneShotSender<RpcResponseEnvelope>;
 
-impl ApiServer {
-    pub fn new(cfg: ServerConfig) -> ApiServer {
+impl RpcServer {
+    pub fn new(cfg: ServerConfig) -> RpcServer {
         Self {
             address: cfg.address,
             tcp_listener: Option::None,
         }
     }
 
-    pub async fn run(&mut self) -> Result<Receiver<(ApiRequestEnvelope, ApiResponder)>> {
+    pub async fn run(&mut self) -> Result<Receiver<(RpcRequestEnvelope, RpcResponder)>> {
         let tcp_listener_arc = Arc::new(TcpListener::bind(&self.address).await.unwrap());
         let tcp_listener = tcp_listener_arc.clone();
         self.tcp_listener = Some(tcp_listener_arc);
         println!("> Listening on {:?}", &self.address);
 
         let (request_sender, request_receiver) =
-            mpsc::channel::<(ApiRequestEnvelope, ApiResponder)>(REQUEST_BUFFER_SIZE);
+            mpsc::channel::<(RpcRequestEnvelope, RpcResponder)>(REQUEST_BUFFER_SIZE);
 
         tokio::spawn(async move {
             // TODO: use select here to insert kill switch for shutdown
@@ -43,7 +43,7 @@ impl ApiServer {
                 println!("> Got connection on {}", &client_addr);
                 let request_sender = request_sender.clone();
                 tokio::spawn(async move {
-                    ApiServer::handle_messages(socket, request_sender.clone()).await
+                    RpcServer::handle_messages(socket, request_sender.clone()).await
                 });
             }
         });
@@ -54,22 +54,22 @@ impl ApiServer {
     /// Process data from a socket connection
     async fn handle_messages(
         socket: TcpStream,
-        request_tx: Sender<(ApiRequestEnvelope, OneShotSender<ApiResponseEnvelope>)>,
+        request_tx: Sender<(RpcRequestEnvelope, OneShotSender<RpcResponseEnvelope>)>,
     ) {
-        let connection = Arc::new(ApiServerConnection::new(socket));
+        let connection = Arc::new(RpcServerConnection::new(socket));
 
         tokio::spawn(async move {
             loop {
-                let (response_tx, response_rx) = oneshot::channel::<ApiResponseEnvelope>();
+                let (response_tx, response_rx) = oneshot::channel::<RpcResponseEnvelope>();
 
                 match connection.read().await {
                     Ok(req) => {
                         let _ = request_tx.send((req, response_tx)).await;
                     }
                     Err(e) => {
-                        let _ = response_tx.send(ApiResponseEnvelope {
+                        let _ = response_tx.send(RpcResponseEnvelope {
                             id: 0,
-                            body: ApiResponse::ServerError { msg: e.to_string() },
+                            body: RpcResponse::ServerError { msg: e.to_string() },
                         });
                     }
                 }
@@ -110,14 +110,14 @@ mod server_tests {
     }
 
     struct Runner {
-        request_receiver: Receiver<(ApiRequestEnvelope, ApiResponder)>,
+        request_receiver: Receiver<(RpcRequestEnvelope, RpcResponder)>,
         client_reader: BufReader<OwnedReadHalf>,
         client_writer: BufWriter<OwnedWriteHalf>,
     }
 
     async fn setup() -> Runner {
         let address = Gen::socket_addr();
-        let mut server = ApiServer::new(ServerConfig { address });
+        let mut server = RpcServer::new(ServerConfig { address });
         let request_receiver = server.run().await.unwrap();
 
         let (client_reader, client_writer) =
@@ -135,7 +135,7 @@ mod server_tests {
     #[tokio::test]
     async fn constructs_server_struct() {
         let config = Gen::server_config();
-        let server = ApiServer::new(config.clone());
+        let server = RpcServer::new(config.clone());
         assert_eq!(server.address, config.address);
         assert!(server.tcp_listener.is_none());
     }
@@ -154,7 +154,7 @@ mod server_tests {
         client_writer.write_all(&*client_write).await.unwrap();
         client_writer.flush().await.unwrap();
 
-        let expected_request: ApiRequestEnvelope = request_bytes.try_into().unwrap();
+        let expected_request: RpcRequestEnvelope = request_bytes.try_into().unwrap();
         let (actual_request, _) = request_receiver.recv().await.unwrap();
         assert_eq!(expected_request, actual_request);
     }
@@ -173,7 +173,7 @@ mod server_tests {
         client_writer.write_all(&*client_write).await.unwrap();
         client_writer.flush().await.unwrap();
 
-        let response = Gen::api_response_envelope();
+        let response = Gen::rpc_response_envelope();
         let response_bytes: Vec<u8> = response.clone().into();
         let (_, responder) = request_receiver.recv().await.unwrap();
         let _ = responder.send(response).unwrap();

@@ -6,9 +6,9 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 
+use crate::error::AsyncError;
 use crate::error::NetworkError::MessageDeserializationError;
-use crate::AsyncError;
-use crate::Result;
+use crate::error::Result;
 use crate::NEWLINE;
 use std::fmt::Display;
 
@@ -75,79 +75,65 @@ where
 
 #[cfg(test)]
 mod connection_tests {
-    use crate::api::request::{ApiRequest, ApiRequestEnvelope};
-    use crate::api::response::{ApiResponse, ApiResponseEnvelope};
-    use crate::api::{ClientConnection, ServerConnection};
+    use crate::rpc_legacy::request::{RpcRequest, RpcRequestEnvelope};
+    use crate::rpc_legacy::response::{RpcResponse, RpcResponseEnvelope};
+    use crate::rpc_legacy::{RpcClientConnection, RpcServerConnection};
+
+    lazy_static! {
+        static ref PUT_REQ: RpcRequestEnvelope = RpcRequestEnvelope {
+            id: 42,
+            body: RpcRequest::Put {
+                key: "foo".to_string(),
+                value: "bar".to_string(),
+            },
+        };
+        static ref PUT_REQ_BYTES: Vec<u8> = [
+            r#"{"id":42,"body":{"type":"Put","key":"foo","value":"bar"}}"#,
+            "\n",
+        ]
+        .concat()
+        .into();
+        static ref PUT_RESP: RpcResponseEnvelope = RpcResponseEnvelope {
+            id: 42,
+            body: RpcResponse::ToPut { was_modified: true },
+        };
+        static ref PUT_RESP_BYTES: Vec<u8> = [
+            r#"{"id":42,"body":{"type":"ToPut","was_modified":true}}"#,
+            "\n",
+        ]
+        .concat()
+        .into();
+    }
 
     #[tokio::test]
     async fn client_reads() {
-        let response_bytes: Vec<u8> = [r#"{"id":42,"body":{"type":"ToGet","value":"bar"}}"#, "\n"]
-            .concat()
-            .into();
-        let response = ApiResponseEnvelope {
-            id: 42,
-            body: ApiResponse::ToGet {
-                value: Some("bar".to_string()),
-            },
-        };
+        let (connection, input_sender, _) = RpcClientConnection::with_channel();
+        input_sender.send(PUT_RESP_BYTES.clone()).unwrap();
 
-        let (connection, input_sender, _) = ClientConnection::with_channel();
-        input_sender.send(response_bytes.clone()).unwrap();
-
-        assert_eq!(connection.read().await.unwrap(), response);
+        assert_eq!(connection.read().await.unwrap(), PUT_RESP.clone());
     }
 
     #[tokio::test]
     async fn client_writes() {
-        let request = ApiRequestEnvelope {
-            id: 42,
-            body: ApiRequest::Get {
-                key: "foo".to_string(),
-            },
-        };
-        let request_bytes: Vec<u8> = [r#"{"id":42,"body":{"type":"Get","key":"foo"}}"#, "\n"]
-            .concat()
-            .into();
+        let (connection, _, output_receiver) = RpcClientConnection::with_channel();
+        let _ = connection.write(PUT_REQ.clone()).await;
 
-        let (connection, _, output_receiver) = ClientConnection::with_channel();
-        let _ = connection.write(request).await;
-
-        assert_eq!(output_receiver.recv().unwrap(), request_bytes);
+        assert_eq!(output_receiver.recv().unwrap(), PUT_REQ_BYTES.clone());
     }
 
     #[tokio::test]
     async fn server_reads() {
-        let request = ApiRequestEnvelope {
-            id: 42,
-            body: ApiRequest::Get {
-                key: "foo".to_string(),
-            },
-        };
-        let request_bytes: Vec<u8> = [r#"{"id":42,"body":{"type":"Get","key":"foo"}}"#, "\n"]
-            .concat()
-            .into();
+        let (connection, input_sender, _) = RpcServerConnection::with_channel();
+        input_sender.send(PUT_REQ_BYTES.clone()).unwrap();
 
-        let (connection, input_sender, _) = ServerConnection::with_channel();
-        input_sender.send(request_bytes.clone()).unwrap();
-
-        assert_eq!(connection.read().await.unwrap(), request);
+        assert_eq!(connection.read().await.unwrap(), PUT_REQ.clone());
     }
 
     #[tokio::test]
     async fn server_writes() {
-        let response = ApiResponseEnvelope {
-            id: 42,
-            body: ApiResponse::ToGet {
-                value: Some("bar".to_string()),
-            },
-        };
-        let response_bytes: Vec<u8> = [r#"{"id":42,"body":{"type":"ToGet","value":"bar"}}"#, "\n"]
-            .concat()
-            .into();
+        let (connection, _, output_receiver) = RpcServerConnection::with_channel();
+        let _ = connection.write(PUT_RESP.clone()).await;
 
-        let (connection, _, output_receiver) = ServerConnection::with_channel();
-        let _ = connection.write(response).await;
-
-        assert_eq!(output_receiver.recv().unwrap(), response_bytes);
+        assert_eq!(output_receiver.recv().unwrap(), PUT_RESP_BYTES.clone());
     }
 }

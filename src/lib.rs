@@ -5,13 +5,12 @@ extern crate lazy_static;
 pub mod api;
 pub mod error;
 pub mod node;
-mod rpc;
+pub mod rpc;
+pub mod rpc_legacy;
 pub mod state;
 pub mod tcp;
 mod test_support;
 
-pub type AsyncError = Box<dyn std::error::Error + Send + Sync>;
-pub type Result<T> = std::result::Result<T, AsyncError>;
 pub const NEWLINE: u8 = '\n' as u8;
 
 pub fn hash(input: &Vec<u8>) -> u64 {
