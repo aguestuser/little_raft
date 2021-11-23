@@ -5,64 +5,64 @@ use std::result::Result as StdResult;
 
 #[derive(Clone, Eq, PartialEq, Debug, Deserialize, Serialize, Hash)]
 #[serde(deny_unknown_fields)]
-pub struct RpcResponseEnvelope {
+pub struct LegacyRpcResponseEnvelope {
     pub id: u64,
-    pub body: RpcResponse,
+    pub body: LegacyRpcResponse,
 }
 
 #[derive(Clone, Eq, PartialEq, Debug, Deserialize, Serialize, Hash)]
 #[serde(tag = "type", deny_unknown_fields)]
-pub enum RpcResponse {
+pub enum LegacyRpcResponse {
     ToPut { was_modified: bool },
     ServerError { msg: String },
 }
 
-impl RpcResponse {
+impl LegacyRpcResponse {
     pub fn display_type(&self) -> String {
         match self {
-            RpcResponse::ToPut { .. } => "ToPut".to_string(),
-            RpcResponse::ServerError { .. } => "Error".to_string(),
+            LegacyRpcResponse::ToPut { .. } => "ToPut".to_string(),
+            LegacyRpcResponse::ServerError { .. } => "Error".to_string(),
         }
     }
 }
 
-impl Into<Vec<u8>> for RpcResponseEnvelope {
+impl Into<Vec<u8>> for LegacyRpcResponseEnvelope {
     fn into(self) -> Vec<u8> {
         serde_json::to_vec(&self).unwrap()
     }
 }
 
-impl TryFrom<Vec<u8>> for RpcResponseEnvelope {
+impl TryFrom<Vec<u8>> for LegacyRpcResponseEnvelope {
     type Error = serde_json::Error;
-    fn try_from(bs: Vec<u8>) -> StdResult<RpcResponseEnvelope, Self::Error> {
+    fn try_from(bs: Vec<u8>) -> StdResult<LegacyRpcResponseEnvelope, Self::Error> {
         serde_json::from_slice(&bs)
     }
 }
 
-impl Into<Vec<u8>> for RpcResponse {
+impl Into<Vec<u8>> for LegacyRpcResponse {
     fn into(self) -> Vec<u8> {
         serde_json::to_vec(&self).unwrap()
     }
 }
 
-impl TryFrom<Vec<u8>> for RpcResponse {
+impl TryFrom<Vec<u8>> for LegacyRpcResponse {
     type Error = serde_json::Error;
-    fn try_from(bs: Vec<u8>) -> StdResult<RpcResponse, Self::Error> {
+    fn try_from(bs: Vec<u8>) -> StdResult<LegacyRpcResponse, Self::Error> {
         serde_json::from_slice(&bs)
     }
 }
 
-impl RpcResponseEnvelope {
-    pub fn error_of(id: u64, msg: String) -> RpcResponseEnvelope {
-        RpcResponseEnvelope {
+impl LegacyRpcResponseEnvelope {
+    pub fn error_of(id: u64, msg: String) -> LegacyRpcResponseEnvelope {
+        LegacyRpcResponseEnvelope {
             id,
-            body: RpcResponse::ServerError { msg },
+            body: LegacyRpcResponse::ServerError { msg },
         }
     }
-    pub fn of_put(id: u64, was_modified: bool) -> RpcResponseEnvelope {
-        RpcResponseEnvelope {
+    pub fn of_put(id: u64, was_modified: bool) -> LegacyRpcResponseEnvelope {
+        LegacyRpcResponseEnvelope {
             id,
-            body: { RpcResponse::ToPut { was_modified } },
+            body: { LegacyRpcResponse::ToPut { was_modified } },
         }
     }
 }
@@ -76,10 +76,10 @@ mod response_tests {
         let input: Vec<u8> = r#"{"id":42,"body":{"type":"ToPut","was_modified":true}}"#.into();
 
         assert_eq!(
-            RpcResponseEnvelope::try_from(input).unwrap(),
-            RpcResponseEnvelope {
+            LegacyRpcResponseEnvelope::try_from(input).unwrap(),
+            LegacyRpcResponseEnvelope {
                 id: 42,
-                body: RpcResponse::ToPut { was_modified: true },
+                body: LegacyRpcResponse::ToPut { was_modified: true },
             }
         );
     }
@@ -87,9 +87,9 @@ mod response_tests {
     #[test]
     fn serializing_put_response() {
         let expected: Vec<u8> = r#"{"id":42,"body":{"type":"ToPut","was_modified":true}}"#.into();
-        let actual: Vec<u8> = RpcResponseEnvelope {
+        let actual: Vec<u8> = LegacyRpcResponseEnvelope {
             id: 42,
-            body: RpcResponse::ToPut { was_modified: true },
+            body: LegacyRpcResponse::ToPut { was_modified: true },
         }
         .into();
         assert_eq!(expected, actual);
@@ -98,9 +98,9 @@ mod response_tests {
     #[test]
     fn serializing_error_response() {
         let expected: Vec<u8> = r#"{"id":42,"body":{"type":"ServerError","msg":"whoops!"}}"#.into();
-        let actual: Vec<u8> = RpcResponseEnvelope {
+        let actual: Vec<u8> = LegacyRpcResponseEnvelope {
             id: 42,
-            body: RpcResponse::ServerError {
+            body: LegacyRpcResponse::ServerError {
                 msg: "whoops!".to_string(),
             },
         }

@@ -16,19 +16,19 @@ use crate::error::NetworkError::{
     BroadcastFailure, ConnectionClosed, RequestTimeout, TaskJoinFailure,
 };
 use crate::error::{AsyncError, Result};
-use crate::rpc_legacy::request::{RpcRequest, RpcRequestEnvelope};
-use crate::rpc_legacy::response::{RpcResponse, RpcResponseEnvelope};
-use crate::rpc_legacy::RpcClientConnection;
+use crate::rpc_legacy::request::{LegacyRpcRequest, LegacyRpcRequestEnvelope};
+use crate::rpc_legacy::response::{LegacyRpcResponse, LegacyRpcResponseEnvelope};
+use crate::rpc_legacy::LegacyRpcClientConnection;
 
 #[cfg(not(test))]
 const TIMEOUT_IN_MILLIS: u64 = 1000;
 #[cfg(test)]
 const TIMEOUT_IN_MILLIS: u64 = 10;
 
-pub struct RpcClient {
+pub struct LegacyRpcClient {
     peer_addresses: Vec<SocketAddr>,
     peers: DashMap<String, Peer>,
-    response_handlers: Arc<DashMap<u64, OneShotSender<RpcResponseEnvelope>>>,
+    response_handlers: Arc<DashMap<u64, OneShotSender<LegacyRpcResponseEnvelope>>>,
     request_id: AtomicU64,
 }
 
@@ -39,13 +39,13 @@ pub struct RpcClientConfig {
 
 pub struct Peer {
     address: SocketAddr, // TODO: should this be a String?
-    connection: Arc<RpcClientConnection>,
+    connection: Arc<LegacyRpcClientConnection>,
 }
 
-impl RpcClient {
+impl LegacyRpcClient {
     /// Construct a `Client` from a `Client` config, leaving "live" resources to be initialized
     /// later in `Client::run`.
-    pub fn new(cfg: RpcClientConfig) -> RpcClient {
+    pub fn new(cfg: RpcClientConfig) -> LegacyRpcClient {
         let RpcClientConfig { peer_addresses } = cfg;
         Self {
             peer_addresses,
@@ -72,7 +72,7 @@ impl RpcClient {
                 .iter()
                 .map(|&address| async move {
                     let stream = TcpSocket::new_v4()?.connect(address).await?;
-                    let connection = Arc::new(RpcClientConnection::new(stream));
+                    let connection = Arc::new(LegacyRpcClientConnection::new(stream));
                     Ok(Peer {
                         address,
                         connection,
@@ -117,18 +117,21 @@ impl RpcClient {
         &self,
         key: String,
         value: String,
-    ) -> Result<Vec<RpcResponseEnvelope>> {
-        let request = RpcRequest::Put { key, value };
-        let filter = |r: RpcResponseEnvelope| match r.body {
-            RpcResponse::ToPut { .. } => Some(r),
+    ) -> Result<Vec<LegacyRpcResponseEnvelope>> {
+        let request = LegacyRpcRequest::Put { key, value };
+        let filter = |r: LegacyRpcResponseEnvelope| match r.body {
+            LegacyRpcResponse::ToPut { .. } => Some(r),
             _ => None,
         };
         self.broadcast_and_filter(request, filter).await
     }
 
     #[cfg(test)]
-    pub async fn broadcast(&self, request: RpcRequest) -> Result<Vec<RpcResponseEnvelope>> {
-        let filter = |env: RpcResponseEnvelope| Some(env);
+    pub async fn broadcast(
+        &self,
+        request: LegacyRpcRequest,
+    ) -> Result<Vec<LegacyRpcResponseEnvelope>> {
+        let filter = |env: LegacyRpcResponseEnvelope| Some(env);
         self.broadcast_and_filter(request, filter).await
     }
 
@@ -139,13 +142,13 @@ impl RpcClient {
     /// arrive from a majority of peers, without waiting for further responses from other peers.
     pub async fn broadcast_and_filter(
         &self,
-        request: RpcRequest,
-        filter: impl Fn(RpcResponseEnvelope) -> Option<RpcResponseEnvelope>,
-    ) -> Result<Vec<RpcResponseEnvelope>> {
+        request: LegacyRpcRequest,
+        filter: impl Fn(LegacyRpcResponseEnvelope) -> Option<LegacyRpcResponseEnvelope>,
+    ) -> Result<Vec<LegacyRpcResponseEnvelope>> {
         let num_peers = self.peers.len();
         let majority = num_peers / 2;
 
-        let connections: Vec<Arc<RpcClientConnection>> = self
+        let connections: Vec<Arc<LegacyRpcClientConnection>> = self
             .peers
             .iter()
             .map(|e| e.value().connection.clone())
@@ -156,8 +159,8 @@ impl RpcClient {
                 let handlers = self.response_handlers.clone();
                 let id = self.next_id();
                 let request = request.clone();
-                RpcClient::write(
-                    RpcRequestEnvelope { id, body: request },
+                LegacyRpcClient::write(
+                    LegacyRpcRequestEnvelope { id, body: request },
                     connection.clone(),
                     handlers,
                 )
@@ -170,7 +173,7 @@ impl RpcClient {
                     .map_or(None, |response| filter(response))
             })
             .take(majority)
-            .collect::<Vec<RpcResponseEnvelope>>()
+            .collect::<Vec<LegacyRpcResponseEnvelope>>()
             .await;
 
         if successful_responses.len() < majority {
@@ -186,11 +189,11 @@ impl RpcClient {
     /// Then wait to either receive the response and return an `Ok<Response>` or timeout
     /// and return an `Err`.
     async fn write(
-        request: RpcRequestEnvelope,
-        connection: Arc<RpcClientConnection>,
-        response_handlers: Arc<DashMap<u64, OneShotSender<RpcResponseEnvelope>>>,
-    ) -> Result<RpcResponseEnvelope> {
-        let (response_tx, response_rx) = oneshot::channel::<RpcResponseEnvelope>();
+        request: LegacyRpcRequestEnvelope,
+        connection: Arc<LegacyRpcClientConnection>,
+        response_handlers: Arc<DashMap<u64, OneShotSender<LegacyRpcResponseEnvelope>>>,
+    ) -> Result<LegacyRpcResponseEnvelope> {
+        let (response_tx, response_rx) = oneshot::channel::<LegacyRpcResponseEnvelope>();
         let _ = response_handlers.insert(request.id, response_tx);
         connection.write(request).await?;
 
@@ -219,9 +222,9 @@ mod test_client {
     use tokio::sync::{mpsc, Mutex};
 
     use crate::error::NetworkError;
-    use crate::rpc_legacy::request::RpcRequest;
-    use crate::rpc_legacy::response::RpcResponse;
-    use crate::rpc_legacy::RpcServerConnection;
+    use crate::rpc_legacy::request::LegacyRpcRequest;
+    use crate::rpc_legacy::response::LegacyRpcResponse;
+    use crate::rpc_legacy::LegacyRpcServerConnection;
     use crate::test_support::gen::Gen;
 
     use super::*;
@@ -230,13 +233,13 @@ mod test_client {
         client_config: RpcClientConfig,
         peer_addresses: Vec<SocketAddr>,
         recipient_addresses: Vec<String>,
-        req_rx: Receiver<(SocketAddr, RpcRequestEnvelope)>,
+        req_rx: Receiver<(SocketAddr, LegacyRpcRequestEnvelope)>,
     }
 
     lazy_static! {
         static ref NUM_PEERS: usize = 5;
         static ref MAJORITY: usize = *NUM_PEERS / 2;
-        static ref PUT_REQ: RpcRequest = RpcRequest::Put {
+        static ref PUT_REQ: LegacyRpcRequest = LegacyRpcRequest::Put {
             key: "foo".to_string(),
             value: "bar".to_string(),
         };
@@ -246,17 +249,17 @@ mod test_client {
         setup_with(Vec::new(), Vec::new()).await
     }
 
-    async fn setup_with_responses(responses: Vec<RpcResponse>) -> Runner {
+    async fn setup_with_responses(responses: Vec<LegacyRpcResponse>) -> Runner {
         setup_with(responses, Vec::new()).await
     }
 
-    async fn setup_with(responses: Vec<RpcResponse>, fuzzed_ids: Vec<u64>) -> Runner {
+    async fn setup_with(responses: Vec<LegacyRpcResponse>, fuzzed_ids: Vec<u64>) -> Runner {
         let buf_size = *NUM_PEERS;
         let responses = Arc::new(responses);
         let fuzzed_ids = Arc::new(fuzzed_ids);
 
         let peer_addresses: Vec<SocketAddr> = (0..*NUM_PEERS).map(|_| Gen::socket_addr()).collect();
-        let (req_tx, req_rx) = mpsc::channel::<(SocketAddr, RpcRequestEnvelope)>(buf_size);
+        let (req_tx, req_rx) = mpsc::channel::<(SocketAddr, LegacyRpcRequestEnvelope)>(buf_size);
 
         for (peer_idx, peer_addr) in peer_addresses.clone().into_iter().enumerate() {
             let listener = TcpListener::bind(peer_addr).await.unwrap();
@@ -274,7 +277,7 @@ mod test_client {
                     let fuzzed_ids = ids.clone();
 
                     tokio::spawn(async move {
-                        let conn = RpcServerConnection::new(socket);
+                        let conn = LegacyRpcServerConnection::new(socket);
                         loop {
                             let req = conn.read().await.unwrap();
                             // println!("> Peer at {:?} got request: {:?}", peer_addr, req);
@@ -282,7 +285,7 @@ mod test_client {
                             req_tx.send((peer_addr, req.clone())).await.unwrap();
                             // send canned response provided by test harness to client
                             if !responses.is_empty() {
-                                let response = RpcResponseEnvelope {
+                                let response = LegacyRpcResponseEnvelope {
                                     // respond with request id unless we have provided fuzzed ids
                                     id: if fuzzed_ids.is_empty() {
                                         req.id
@@ -316,7 +319,7 @@ mod test_client {
         let cfg = RpcClientConfig {
             peer_addresses: vec![Gen::socket_addr(), Gen::socket_addr(), Gen::socket_addr()],
         };
-        let client = RpcClient::new(cfg.clone());
+        let client = LegacyRpcClient::new(cfg.clone());
 
         assert_eq!(client.peer_addresses, cfg.peer_addresses.clone());
         assert!(client.peers.is_empty());
@@ -324,7 +327,7 @@ mod test_client {
 
     #[tokio::test]
     async fn provides_incrementing_ids() {
-        let client = RpcClient::new(Gen::rpc_client_config());
+        let client = LegacyRpcClient::new(Gen::rpc_client_config());
 
         assert_eq!(client.next_id(), 0);
         assert_eq!(client.next_id(), 1);
@@ -338,7 +341,7 @@ mod test_client {
             ..
         } = setup().await;
 
-        let client = RpcClient::new(client_config);
+        let client = LegacyRpcClient::new(client_config);
         client.run().await.unwrap();
 
         assert_eq!(client.peers.len(), *NUM_PEERS);
@@ -362,14 +365,14 @@ mod test_client {
         } = setup().await;
 
         let a_req_rx = Arc::new(Mutex::new(req_rx));
-        let client = RpcClient::new(client_config);
+        let client = LegacyRpcClient::new(client_config);
         let _ = client.run().await.unwrap();
         let _ = client.broadcast(PUT_REQ.clone()).await;
         let _ = req_rx;
 
         let (expected_receiving_peers, expected_received_requests) = (
             HashSet::from_iter(peer_addresses.into_iter()),
-            HashSet::from_iter((0..5).map(|id| RpcRequestEnvelope {
+            HashSet::from_iter((0..5).map(|id| LegacyRpcRequestEnvelope {
                 id,
                 body: PUT_REQ.clone(),
             })),
@@ -377,14 +380,14 @@ mod test_client {
 
         let (actual_receiving_peers, actual_received_requests): (
             HashSet<SocketAddr>,
-            HashSet<RpcRequestEnvelope>,
+            HashSet<LegacyRpcRequestEnvelope>,
         ) = futures::stream::iter(0..5)
             .map(|_| {
                 let rx = a_req_rx.clone();
                 async move { rx.lock().await.recv().await.unwrap() }
             })
             .buffer_unordered(5)
-            .collect::<HashSet<(SocketAddr, RpcRequestEnvelope)>>()
+            .collect::<HashSet<(SocketAddr, LegacyRpcRequestEnvelope)>>()
             .await
             .into_iter()
             .unzip();
@@ -397,7 +400,7 @@ mod test_client {
     async fn handles_broadcast_response_from_majority_of_peers() {
         let mocked_responses = std::iter::repeat(Gen::rpc_response_to(PUT_REQ.clone()))
             .take(*NUM_PEERS)
-            .collect::<Vec<RpcResponse>>();
+            .collect::<Vec<LegacyRpcResponse>>();
 
         let Runner {
             client_config,
@@ -405,11 +408,11 @@ mod test_client {
             ..
         } = setup_with_responses(mocked_responses.clone()).await;
 
-        let client = RpcClient::new(client_config);
+        let client = LegacyRpcClient::new(client_config);
         let _ = client.run().await.unwrap();
         let _ = req_rx;
 
-        let responses: Vec<RpcResponse> = client
+        let responses: Vec<LegacyRpcResponse> = client
             .broadcast(PUT_REQ.clone())
             .await
             .unwrap()
@@ -428,7 +431,7 @@ mod test_client {
             ..
         } = setup().await;
 
-        let client = RpcClient::new(client_config);
+        let client = LegacyRpcClient::new(client_config);
         let _ = client.run().await.unwrap();
         let _ = req_rx;
 
@@ -442,7 +445,7 @@ mod test_client {
     #[tokio::test]
     async fn filters_broadcast_responses_by_predicate() {
         let get_outcome = Gen::rpc_response_to(PUT_REQ.clone());
-        let err_outcome = RpcResponse::ServerError {
+        let err_outcome = LegacyRpcResponse::ServerError {
             msg: "foo".to_string(),
         };
         let mocked_responses = (0..*NUM_PEERS)
@@ -461,11 +464,11 @@ mod test_client {
             ..
         } = setup_with_responses(mocked_responses.clone()).await;
 
-        let client = RpcClient::new(client_config);
+        let client = LegacyRpcClient::new(client_config);
         let _ = client.run().await.unwrap();
         let _ = req_rx;
-        let filter = |env: RpcResponseEnvelope| match env.body {
-            RpcResponse::ToPut { .. } => Some(env),
+        let filter = |env: LegacyRpcResponseEnvelope| match env.body {
+            LegacyRpcResponse::ToPut { .. } => Some(env),
             _ => None,
         };
 

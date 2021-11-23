@@ -75,14 +75,14 @@ where
 
 #[cfg(test)]
 mod connection_tests {
-    use crate::rpc_legacy::request::{RpcRequest, RpcRequestEnvelope};
-    use crate::rpc_legacy::response::{RpcResponse, RpcResponseEnvelope};
-    use crate::rpc_legacy::{RpcClientConnection, RpcServerConnection};
+    use crate::rpc_legacy::request::{LegacyRpcRequest, LegacyRpcRequestEnvelope};
+    use crate::rpc_legacy::response::{LegacyRpcResponse, LegacyRpcResponseEnvelope};
+    use crate::rpc_legacy::{LegacyRpcClientConnection, LegacyRpcServerConnection};
 
     lazy_static! {
-        static ref PUT_REQ: RpcRequestEnvelope = RpcRequestEnvelope {
+        static ref PUT_REQ: LegacyRpcRequestEnvelope = LegacyRpcRequestEnvelope {
             id: 42,
-            body: RpcRequest::Put {
+            body: LegacyRpcRequest::Put {
                 key: "foo".to_string(),
                 value: "bar".to_string(),
             },
@@ -93,9 +93,9 @@ mod connection_tests {
         ]
         .concat()
         .into();
-        static ref PUT_RESP: RpcResponseEnvelope = RpcResponseEnvelope {
+        static ref PUT_RESP: LegacyRpcResponseEnvelope = LegacyRpcResponseEnvelope {
             id: 42,
-            body: RpcResponse::ToPut { was_modified: true },
+            body: LegacyRpcResponse::ToPut { was_modified: true },
         };
         static ref PUT_RESP_BYTES: Vec<u8> = [
             r#"{"id":42,"body":{"type":"ToPut","was_modified":true}}"#,
@@ -107,7 +107,7 @@ mod connection_tests {
 
     #[tokio::test]
     async fn client_reads() {
-        let (connection, input_sender, _) = RpcClientConnection::with_channel();
+        let (connection, input_sender, _) = LegacyRpcClientConnection::with_channel();
         input_sender.send(PUT_RESP_BYTES.clone()).unwrap();
 
         assert_eq!(connection.read().await.unwrap(), PUT_RESP.clone());
@@ -115,7 +115,7 @@ mod connection_tests {
 
     #[tokio::test]
     async fn client_writes() {
-        let (connection, _, output_receiver) = RpcClientConnection::with_channel();
+        let (connection, _, output_receiver) = LegacyRpcClientConnection::with_channel();
         let _ = connection.write(PUT_REQ.clone()).await;
 
         assert_eq!(output_receiver.recv().unwrap(), PUT_REQ_BYTES.clone());
@@ -123,7 +123,7 @@ mod connection_tests {
 
     #[tokio::test]
     async fn server_reads() {
-        let (connection, input_sender, _) = RpcServerConnection::with_channel();
+        let (connection, input_sender, _) = LegacyRpcServerConnection::with_channel();
         input_sender.send(PUT_REQ_BYTES.clone()).unwrap();
 
         assert_eq!(connection.read().await.unwrap(), PUT_REQ.clone());
@@ -131,7 +131,7 @@ mod connection_tests {
 
     #[tokio::test]
     async fn server_writes() {
-        let (connection, _, output_receiver) = RpcServerConnection::with_channel();
+        let (connection, _, output_receiver) = LegacyRpcServerConnection::with_channel();
         let _ = connection.write(PUT_RESP.clone()).await;
 
         assert_eq!(output_receiver.recv().unwrap(), PUT_RESP_BYTES.clone());

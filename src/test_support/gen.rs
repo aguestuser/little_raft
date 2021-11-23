@@ -3,8 +3,8 @@ use crate::api::client::ApiClientConfig;
 use crate::api::request::ApiRequest;
 use crate::api::response::{ApiResponse, ApiResponseEnvelope};
 use crate::rpc_legacy::client::RpcClientConfig;
-use crate::rpc_legacy::request::{RpcRequest, RpcRequestEnvelope};
-use crate::rpc_legacy::response::{RpcResponse, RpcResponseEnvelope};
+use crate::rpc_legacy::request::{LegacyRpcRequest, LegacyRpcRequestEnvelope};
+use crate::rpc_legacy::response::{LegacyRpcResponse, LegacyRpcResponseEnvelope};
 use crate::tcp::ServerConfig;
 use rand::seq::SliceRandom;
 use rand::Rng;
@@ -46,15 +46,15 @@ impl Gen {
         SocketAddr::from(([127, 0, 0, 1], port))
     }
 
-    pub fn request_envelope() -> RpcRequestEnvelope {
-        RpcRequestEnvelope {
+    pub fn request_envelope() -> LegacyRpcRequestEnvelope {
+        LegacyRpcRequestEnvelope {
             id: Gen::u64(),
             body: Gen::request(),
         }
     }
 
-    pub fn request() -> RpcRequest {
-        let requests = vec![RpcRequest::Put {
+    pub fn request() -> LegacyRpcRequest {
+        let requests = vec![LegacyRpcRequest::Put {
             key: Gen::str(),
             value: Gen::str(),
         }];
@@ -92,26 +92,26 @@ impl Gen {
         }
     }
 
-    pub fn rpc_response_envelope() -> RpcResponseEnvelope {
-        RpcResponseEnvelope {
+    pub fn rpc_response_envelope() -> LegacyRpcResponseEnvelope {
+        LegacyRpcResponseEnvelope {
             id: Gen::u64(),
             body: Gen::rpc_response(),
         }
     }
 
-    pub fn rpc_response() -> RpcResponse {
+    pub fn rpc_response() -> LegacyRpcResponse {
         let responses = vec![
-            RpcResponse::ToPut {
+            LegacyRpcResponse::ToPut {
                 was_modified: Gen::bool(),
             },
-            RpcResponse::ServerError { msg: Gen::str() },
+            LegacyRpcResponse::ServerError { msg: Gen::str() },
         ];
         responses.choose(&mut rand::thread_rng()).unwrap().clone()
     }
 
-    pub fn rpc_response_to(request: RpcRequest) -> RpcResponse {
+    pub fn rpc_response_to(request: LegacyRpcRequest) -> LegacyRpcResponse {
         match request {
-            RpcRequest::Put { .. } => RpcResponse::ToPut {
+            LegacyRpcRequest::Put { .. } => LegacyRpcResponse::ToPut {
                 was_modified: Gen::bool(),
             },
         }

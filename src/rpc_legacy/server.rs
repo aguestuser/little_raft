@@ -7,34 +7,34 @@ use tokio::sync::oneshot::Sender as OneShotSender;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::error::Result;
-use crate::rpc_legacy::request::RpcRequestEnvelope;
-use crate::rpc_legacy::response::{RpcResponse, RpcResponseEnvelope};
-use crate::rpc_legacy::RpcServerConnection;
+use crate::rpc_legacy::request::LegacyRpcRequestEnvelope;
+use crate::rpc_legacy::response::{LegacyRpcResponse, LegacyRpcResponseEnvelope};
+use crate::rpc_legacy::LegacyRpcServerConnection;
 use crate::tcp::{ServerConfig, REQUEST_BUFFER_SIZE};
 
-pub struct RpcServer {
+pub struct LegacyRpcServer {
     address: SocketAddr,
     tcp_listener: Option<Arc<TcpListener>>,
 }
 
-type RpcResponder = OneShotSender<RpcResponseEnvelope>;
+type RpcResponder = OneShotSender<LegacyRpcResponseEnvelope>;
 
-impl RpcServer {
-    pub fn new(cfg: ServerConfig) -> RpcServer {
+impl LegacyRpcServer {
+    pub fn new(cfg: ServerConfig) -> LegacyRpcServer {
         Self {
             address: cfg.address,
             tcp_listener: Option::None,
         }
     }
 
-    pub async fn run(&mut self) -> Result<Receiver<(RpcRequestEnvelope, RpcResponder)>> {
+    pub async fn run(&mut self) -> Result<Receiver<(LegacyRpcRequestEnvelope, RpcResponder)>> {
         let tcp_listener_arc = Arc::new(TcpListener::bind(&self.address).await.unwrap());
         let tcp_listener = tcp_listener_arc.clone();
         self.tcp_listener = Some(tcp_listener_arc);
         println!("> Listening on {:?}", &self.address);
 
         let (request_sender, request_receiver) =
-            mpsc::channel::<(RpcRequestEnvelope, RpcResponder)>(REQUEST_BUFFER_SIZE);
+            mpsc::channel::<(LegacyRpcRequestEnvelope, RpcResponder)>(REQUEST_BUFFER_SIZE);
 
         tokio::spawn(async move {
             // TODO: use select here to insert kill switch for shutdown
@@ -43,7 +43,7 @@ impl RpcServer {
                 println!("> Got connection on {}", &client_addr);
                 let request_sender = request_sender.clone();
                 tokio::spawn(async move {
-                    RpcServer::handle_messages(socket, request_sender.clone()).await
+                    LegacyRpcServer::handle_messages(socket, request_sender.clone()).await
                 });
             }
         });
@@ -54,22 +54,25 @@ impl RpcServer {
     /// Process data from a socket connection
     async fn handle_messages(
         socket: TcpStream,
-        request_tx: Sender<(RpcRequestEnvelope, OneShotSender<RpcResponseEnvelope>)>,
+        request_tx: Sender<(
+            LegacyRpcRequestEnvelope,
+            OneShotSender<LegacyRpcResponseEnvelope>,
+        )>,
     ) {
-        let connection = Arc::new(RpcServerConnection::new(socket));
+        let connection = Arc::new(LegacyRpcServerConnection::new(socket));
 
         tokio::spawn(async move {
             loop {
-                let (response_tx, response_rx) = oneshot::channel::<RpcResponseEnvelope>();
+                let (response_tx, response_rx) = oneshot::channel::<LegacyRpcResponseEnvelope>();
 
                 match connection.read().await {
                     Ok(req) => {
                         let _ = request_tx.send((req, response_tx)).await;
                     }
                     Err(e) => {
-                        let _ = response_tx.send(RpcResponseEnvelope {
+                        let _ = response_tx.send(LegacyRpcResponseEnvelope {
                             id: 0,
-                            body: RpcResponse::ServerError { msg: e.to_string() },
+                            body: LegacyRpcResponse::ServerError { msg: e.to_string() },
                         });
                     }
                 }
@@ -110,14 +113,14 @@ mod server_tests {
     }
 
     struct Runner {
-        request_receiver: Receiver<(RpcRequestEnvelope, RpcResponder)>,
+        request_receiver: Receiver<(LegacyRpcRequestEnvelope, RpcResponder)>,
         client_reader: BufReader<OwnedReadHalf>,
         client_writer: BufWriter<OwnedWriteHalf>,
     }
 
     async fn setup() -> Runner {
         let address = Gen::socket_addr();
-        let mut server = RpcServer::new(ServerConfig { address });
+        let mut server = LegacyRpcServer::new(ServerConfig { address });
         let request_receiver = server.run().await.unwrap();
 
         let (client_reader, client_writer) =
@@ -135,7 +138,7 @@ mod server_tests {
     #[tokio::test]
     async fn constructs_server_struct() {
         let config = Gen::server_config();
-        let server = RpcServer::new(config.clone());
+        let server = LegacyRpcServer::new(config.clone());
         assert_eq!(server.address, config.address);
         assert!(server.tcp_listener.is_none());
     }
@@ -154,7 +157,7 @@ mod server_tests {
         client_writer.write_all(&*client_write).await.unwrap();
         client_writer.flush().await.unwrap();
 
-        let expected_request: RpcRequestEnvelope = request_bytes.try_into().unwrap();
+        let expected_request: LegacyRpcRequestEnvelope = request_bytes.try_into().unwrap();
         let (actual_request, _) = request_receiver.recv().await.unwrap();
         assert_eq!(expected_request, actual_request);
     }

@@ -6,10 +6,10 @@ use crate::api::response::ApiResponseEnvelope;
 use crate::api::server::ApiServer;
 use crate::error::ProtocolError::{FollowerRequired, ReplicationFailed};
 use crate::error::Result;
-use crate::rpc_legacy::client::{RpcClient, RpcClientConfig};
-use crate::rpc_legacy::response::RpcResponseEnvelope;
-use crate::rpc_legacy::server::RpcServer;
-use crate::rpc_legacy::RpcRequest;
+use crate::rpc_legacy::client::{LegacyRpcClient, RpcClientConfig};
+use crate::rpc_legacy::response::LegacyRpcResponseEnvelope;
+use crate::rpc_legacy::server::LegacyRpcServer;
+use crate::rpc_legacy::LegacyRpcRequest;
 use crate::state::store::Store;
 use crate::tcp::ServerConfig;
 use tokio::sync::Mutex;
@@ -19,8 +19,8 @@ pub struct Node {
     role: Arc<Role>, // arc b/c we need to share role across task boundaries. (refactor to avoid that?)
     api_server: ApiServer,
     leader_address: Arc<Mutex<SocketAddr>>,
-    rpc_client: Arc<RpcClient>,
-    rpc_server: RpcServer,
+    rpc_client: Arc<LegacyRpcClient>,
+    rpc_server: LegacyRpcServer,
 }
 
 pub struct NodeConfig {
@@ -52,8 +52,8 @@ impl Node {
                 address: api_address,
             }),
             leader_address: Arc::new(Mutex::new(leader_address)),
-            rpc_client: Arc::new(RpcClient::new(RpcClientConfig { peer_addresses })),
-            rpc_server: RpcServer::new(ServerConfig {
+            rpc_client: Arc::new(LegacyRpcClient::new(RpcClientConfig { peer_addresses })),
+            rpc_server: LegacyRpcServer::new(ServerConfig {
                 address: rpc_address,
             }),
         }
@@ -110,19 +110,20 @@ impl Node {
         tokio::spawn(async move {
             while let Some((req, responder)) = rpc_request_rx.recv().await {
                 let response = match req.body {
-                    RpcRequest::Put { key, value } => match role.as_ref() {
-                        Role::Leader => {
-                            RpcResponseEnvelope::error_of(req.id, FollowerRequired.to_string())
-                        }
+                    LegacyRpcRequest::Put { key, value } => match role.as_ref() {
+                        Role::Leader => LegacyRpcResponseEnvelope::error_of(
+                            req.id,
+                            FollowerRequired.to_string(),
+                        ),
                         Role::Follower => {
                             let was_modified = store.put(&key, &value).await;
-                            RpcResponseEnvelope::of_put(req.id, was_modified)
+                            LegacyRpcResponseEnvelope::of_put(req.id, was_modified)
                         }
                     },
                 };
                 let _ = responder.send(response)?;
             }
-            Ok::<(), RpcResponseEnvelope>(())
+            Ok::<(), LegacyRpcResponseEnvelope>(())
         });
 
         Ok(())
@@ -133,8 +134,8 @@ impl Node {
 mod test_node {
     use tokio::net::TcpListener;
 
-    use crate::rpc_legacy::response::RpcResponse;
-    use crate::rpc_legacy::RpcServerConnection;
+    use crate::rpc_legacy::response::LegacyRpcResponse;
+    use crate::rpc_legacy::LegacyRpcServerConnection;
     use crate::test_support::gen::Gen;
 
     use super::*;
@@ -144,8 +145,8 @@ mod test_node {
     lazy_static! {
         static ref NUM_PEERS: usize = 5;
         static ref MAJORITY: usize = *NUM_PEERS / 2;
-        static ref PUT_RESP: RpcResponse = RpcResponse::ToPut { was_modified: true };
-        static ref ERR_RESP: RpcResponse = RpcResponse::ServerError {
+        static ref PUT_RESP: LegacyRpcResponse = LegacyRpcResponse::ToPut { was_modified: true };
+        static ref ERR_RESP: LegacyRpcResponse = LegacyRpcResponse::ServerError {
             msg: "oh noes!".to_string()
         };
     }
@@ -155,7 +156,7 @@ mod test_node {
         node: Node,
     }
 
-    async fn setup_with(role: Role, responses: Vec<RpcResponse>) -> Runner {
+    async fn setup_with(role: Role, responses: Vec<LegacyRpcResponse>) -> Runner {
         let responses = Arc::new(responses);
         let peer_addresses: Vec<SocketAddr> = (0..*NUM_PEERS).map(|_| Gen::socket_addr()).collect();
         let leader_address = peer_addresses[0].clone();
@@ -171,12 +172,12 @@ mod test_node {
 
                     let responses = responses.clone();
                     tokio::spawn(async move {
-                        let conn = RpcServerConnection::new(socket);
+                        let conn = LegacyRpcServerConnection::new(socket);
                         loop {
                             let req = conn.read().await.unwrap();
                             // println!("> Peer at {:?} got request: {:?}", peer_addr, req);
                             if !responses.is_empty() {
-                                let response = RpcResponseEnvelope {
+                                let response = LegacyRpcResponseEnvelope {
                                     id: req.id,
                                     body: responses[peer_idx].clone(),
                                 };
@@ -219,7 +220,7 @@ mod test_node {
     async fn leader_handles_successfully_replicated_put() {
         let responses = std::iter::repeat(PUT_RESP.clone())
             .take(*NUM_PEERS)
-            .collect::<Vec<RpcResponse>>();
+            .collect::<Vec<LegacyRpcResponse>>();
         let Runner { client, .. } = setup_with(Role::Leader, responses).await;
 
         let response = client.put("foo", "bar").await.unwrap();
@@ -230,7 +231,7 @@ mod test_node {
     async fn leader_handles_unsuccessfully_replicated_put() {
         let responses = std::iter::repeat(ERR_RESP.clone())
             .take(*NUM_PEERS)
-            .collect::<Vec<RpcResponse>>();
+            .collect::<Vec<LegacyRpcResponse>>();
         let Runner { client, .. } = setup_with(Role::Leader, responses).await;
 
         let put_response = client.put("foo", "bar").await;
@@ -258,7 +259,7 @@ mod test_node {
     async fn leader_handles_get_of_put_value() {
         let responses = std::iter::repeat(PUT_RESP.clone())
             .take(*NUM_PEERS)
-            .collect::<Vec<RpcResponse>>();
+            .collect::<Vec<LegacyRpcResponse>>();
         let Runner { client, .. } = setup_with(Role::Leader, responses).await;
 
         let _ = client.put("foo", "bar").await;
@@ -270,7 +271,7 @@ mod test_node {
     async fn leader_handles_idempotent_puts() {
         let responses = std::iter::repeat(PUT_RESP.clone())
             .take(*NUM_PEERS)
-            .collect::<Vec<RpcResponse>>();
+            .collect::<Vec<LegacyRpcResponse>>();
         let Runner { client, .. } = setup_with(Role::Leader, responses).await;
 
         let put_response_1 = client.put("foo", "bar").await.unwrap();
@@ -284,7 +285,7 @@ mod test_node {
     async fn leader_handles_sequential_puts() {
         let responses = std::iter::repeat(PUT_RESP.clone())
             .take(*NUM_PEERS)
-            .collect::<Vec<RpcResponse>>();
+            .collect::<Vec<LegacyRpcResponse>>();
 
         let Runner { client, .. } = setup_with(Role::Leader, responses).await;
         let put_response_1 = client.put("foo", "bar").await.unwrap();
