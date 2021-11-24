@@ -1,17 +1,18 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use crate::api::request::ApiRequest;
+use crate::api::request::{ApiRequest, ApiRequestEnvelope};
 use crate::api::response::ApiResponseEnvelope;
-use crate::api::server::ApiServer;
+use crate::api::server::{ApiResponder, ApiServer};
 use crate::error::ProtocolError::{FollowerRequired, ReplicationFailed};
 use crate::error::Result;
 use crate::rpc_legacy::client::{LegacyRpcClient, RpcClientConfig};
 use crate::rpc_legacy::response::LegacyRpcResponseEnvelope;
-use crate::rpc_legacy::server::LegacyRpcServer;
-use crate::rpc_legacy::LegacyRpcRequest;
+use crate::rpc_legacy::server::{LegacyRpcResponder, LegacyRpcServer};
+use crate::rpc_legacy::{LegacyRpcRequest, LegacyRpcRequestEnvelope};
 use crate::state::store::Store;
 use crate::tcp::ServerConfig;
+use tokio::sync::mpsc::Receiver;
 use tokio::sync::Mutex;
 
 pub struct Node {
@@ -63,13 +64,25 @@ impl Node {
         let mut rpc_request_rx = self.rpc_server.run().await?;
         let _ = self.rpc_client.run().await?;
 
-        // handle api requests
-        let mut api_request_rx = self.api_server.run().await?;
-        let role = self.role.clone();
-        let store = self.store.clone();
-        let rpc_client = self.rpc_client.clone();
-        let leader_address = self.leader_address.clone();
+        Self::handle_api_requests(
+            self.api_server.run().await?,
+            self.role.clone(),
+            self.store.clone(),
+            self.rpc_client.clone(),
+            self.leader_address.clone(),
+        );
+        Self::handle_legacy_rpc_requests(rpc_request_rx, self.role.clone(), self.store.clone());
 
+        Ok(())
+    }
+
+    fn handle_api_requests(
+        mut api_request_rx: Receiver<(ApiRequestEnvelope, ApiResponder)>,
+        role: Arc<Role>,
+        store: Arc<Store>,
+        rpc_client: Arc<LegacyRpcClient>,
+        leader_address: Arc<Mutex<SocketAddr>>,
+    ) {
         tokio::spawn(async move {
             while let Some((req, responder)) = api_request_rx.recv().await {
                 let response: ApiResponseEnvelope = match req.body {
@@ -102,11 +115,13 @@ impl Node {
             }
             Ok::<(), ApiResponseEnvelope>(())
         });
+    }
 
-        // handle rpc requests
-        let role = self.role.clone();
-        let store = self.store.clone();
-
+    fn handle_legacy_rpc_requests(
+        mut rpc_request_rx: Receiver<(LegacyRpcRequestEnvelope, LegacyRpcResponder)>,
+        role: Arc<Role>,
+        store: Arc<Store>,
+    ) {
         tokio::spawn(async move {
             while let Some((req, responder)) = rpc_request_rx.recv().await {
                 let response = match req.body {
@@ -125,8 +140,6 @@ impl Node {
             }
             Ok::<(), LegacyRpcResponseEnvelope>(())
         });
-
-        Ok(())
     }
 }
 

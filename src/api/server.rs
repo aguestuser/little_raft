@@ -17,7 +17,7 @@ pub struct ApiServer {
     tcp_listener: Option<Arc<TcpListener>>,
 }
 
-type ApiResponder = OneShotSender<ApiResponseEnvelope>;
+pub type ApiResponder = OneShotSender<ApiResponseEnvelope>;
 
 impl ApiServer {
     pub fn new(cfg: ServerConfig) -> ApiServer {

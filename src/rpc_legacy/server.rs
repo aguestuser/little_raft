@@ -17,7 +17,7 @@ pub struct LegacyRpcServer {
     tcp_listener: Option<Arc<TcpListener>>,
 }
 
-type RpcResponder = OneShotSender<LegacyRpcResponseEnvelope>;
+pub type LegacyRpcResponder = OneShotSender<LegacyRpcResponseEnvelope>;
 
 impl LegacyRpcServer {
     pub fn new(cfg: ServerConfig) -> LegacyRpcServer {
@@ -27,14 +27,16 @@ impl LegacyRpcServer {
         }
     }
 
-    pub async fn run(&mut self) -> Result<Receiver<(LegacyRpcRequestEnvelope, RpcResponder)>> {
+    pub async fn run(
+        &mut self,
+    ) -> Result<Receiver<(LegacyRpcRequestEnvelope, LegacyRpcResponder)>> {
         let tcp_listener_arc = Arc::new(TcpListener::bind(&self.address).await.unwrap());
         let tcp_listener = tcp_listener_arc.clone();
         self.tcp_listener = Some(tcp_listener_arc);
         println!("> Listening on {:?}", &self.address);
 
         let (request_sender, request_receiver) =
-            mpsc::channel::<(LegacyRpcRequestEnvelope, RpcResponder)>(REQUEST_BUFFER_SIZE);
+            mpsc::channel::<(LegacyRpcRequestEnvelope, LegacyRpcResponder)>(REQUEST_BUFFER_SIZE);
 
         tokio::spawn(async move {
             // TODO: use select here to insert kill switch for shutdown
@@ -113,7 +115,7 @@ mod server_tests {
     }
 
     struct Runner {
-        request_receiver: Receiver<(LegacyRpcRequestEnvelope, RpcResponder)>,
+        request_receiver: Receiver<(LegacyRpcRequestEnvelope, LegacyRpcResponder)>,
         client_reader: BufReader<OwnedReadHalf>,
         client_writer: BufWriter<OwnedWriteHalf>,
     }
