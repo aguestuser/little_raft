@@ -1,4 +1,3 @@
-#[cfg(test)]
 #[macro_use]
 extern crate lazy_static;
 
@@ -6,10 +5,11 @@ pub mod api;
 pub mod error;
 pub mod node;
 pub mod rpc;
-pub mod rpc_legacy;
 pub mod state;
 pub mod tcp;
 mod test_support;
+
+pub type NodeAddr = String;
 
 pub const NEWLINE: u8 = '\n' as u8;
 
@@ -30,3 +30,5 @@ mod hasher_tests {
         assert_eq!(hash(&b"foo".to_vec()), hash(&b"foo".to_vec()))
     }
 }
+
+pub const CHAN_BUF_SIZE: usize = 16;

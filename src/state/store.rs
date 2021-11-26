@@ -23,6 +23,10 @@ impl Store {
     pub async fn get(&self, key: &str) -> Option<String> {
         self.db.get(&key.to_string()).map(|s| s[..].to_string())
     }
+
+    pub async fn size(&self) -> usize {
+        self.db.len()
+    }
 }
 
 #[cfg(test)]

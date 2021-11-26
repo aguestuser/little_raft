@@ -1,0 +1,11 @@
+{"term":0,"command":{"type":"NoOp"}}
+{"term":0,"command":{"type":"NoOp"}}
+{"term":0,"command":{"type":"NoOp"}}
+{"term":0,"command":{"type":"Put","key":"foo","value":"bar"}}
+{"term":0,"command":{"type":"Put","key":"foo","value":"bar"}}
+{"term":0,"command":{"type":"Put","key":"foo","value":"bar"}}
+{"term":0,"command":{"type":"Put","key":"foo","value":"bar"}}
+{"term":0,"command":{"type":"Put","key":"foo","value":"bar"}}
+{"term":0,"command":{"type":"Put","key":"foo","value":"bar"}}
+{"term":0,"command":{"type":"Put","key":"foo","value":"bar"}}
+{"term":0,"command":{"type":"Put","key":"foo","value":"baz"}}

@@ -1,6 +1,6 @@
 use crate::api::request::ApiRequestEnvelope;
 use crate::api::response::ApiResponseEnvelope;
-use crate::tcp::connection::Connection;
+use crate::tcp::Connection;
 
 pub mod client;
 pub mod request;

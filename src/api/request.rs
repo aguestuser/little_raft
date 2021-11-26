@@ -1,15 +1,18 @@
+use std::convert::TryFrom;
+use std::result::Result as StdResult;
+
 use serde::{Deserialize, Serialize};
 use serde_json;
 
-use std::convert::TryFrom;
-use std::result::Result as StdResult;
+use crate::tcp_serializable;
 
 #[derive(Clone, Eq, PartialEq, Debug, Deserialize, Serialize, Hash)]
 #[serde(deny_unknown_fields)]
 pub struct ApiRequestEnvelope {
     pub id: u64,
-    pub body: ApiRequest,
+    pub request: ApiRequest,
 }
+tcp_serializable!(ApiRequestEnvelope);
 
 #[derive(Clone, Eq, PartialEq, Debug, Deserialize, Serialize, Hash)]
 #[serde(tag = "type", deny_unknown_fields)]
@@ -17,32 +20,7 @@ pub enum ApiRequest {
     Get { key: String },
     Put { key: String, value: String },
 }
-
-impl TryFrom<Vec<u8>> for ApiRequestEnvelope {
-    type Error = serde_json::Error;
-    fn try_from(bs: Vec<u8>) -> StdResult<ApiRequestEnvelope, Self::Error> {
-        serde_json::from_slice(&bs)
-    }
-}
-
-impl Into<Vec<u8>> for ApiRequestEnvelope {
-    fn into(self) -> Vec<u8> {
-        serde_json::to_vec(&self).unwrap()
-    }
-}
-
-impl TryFrom<Vec<u8>> for ApiRequest {
-    type Error = serde_json::Error;
-    fn try_from(bs: Vec<u8>) -> StdResult<ApiRequest, Self::Error> {
-        serde_json::from_slice(&bs)
-    }
-}
-
-impl Into<Vec<u8>> for ApiRequest {
-    fn into(self) -> Vec<u8> {
-        serde_json::to_vec(&self).unwrap()
-    }
-}
+tcp_serializable!(ApiRequest);
 
 #[cfg(test)]
 mod request_tests {
@@ -50,13 +28,13 @@ mod request_tests {
 
     #[test]
     fn deserializing_get_request() {
-        let input: Vec<u8> = r#"{"id":42,"body":{"type":"Get","key":"foo"}}"#.into();
+        let input: Vec<u8> = r#"{"id":42,"request":{"type":"Get","key":"foo"}}"#.into();
 
         assert_eq!(
             ApiRequestEnvelope::try_from(input).unwrap(),
             ApiRequestEnvelope {
                 id: 42,
-                body: ApiRequest::Get {
+                request: ApiRequest::Get {
                     key: "foo".to_string(),
                 }
             }
@@ -65,10 +43,10 @@ mod request_tests {
 
     #[test]
     fn serializing_get_request() {
-        let expected: Vec<u8> = r#"{"id":42,"body":{"type":"Get","key":"foo"}}"#.into();
+        let expected: Vec<u8> = r#"{"id":42,"request":{"type":"Get","key":"foo"}}"#.into();
         let actual: Vec<u8> = ApiRequestEnvelope {
             id: 42,
-            body: ApiRequest::Get {
+            request: ApiRequest::Get {
                 key: "foo".to_string(),
             },
         }
@@ -79,12 +57,13 @@ mod request_tests {
 
     #[test]
     fn deserializing_put_request() {
-        let input: Vec<u8> = r#" {"id":42,"body":{"type":"Put","key":"foo","value":"bar"}}"#.into();
+        let input: Vec<u8> =
+            r#" {"id":42,"request":{"type":"Put","key":"foo","value":"bar"}}"#.into();
         assert_eq!(
             ApiRequestEnvelope::try_from(input).unwrap(),
             ApiRequestEnvelope {
                 id: 42,
-                body: ApiRequest::Put {
+                request: ApiRequest::Put {
                     key: "foo".to_string(),
                     value: "bar".to_string(),
                 }
@@ -95,10 +74,10 @@ mod request_tests {
     #[test]
     fn serializing_put_request() {
         let expected: Vec<u8> =
-            r#"{"id":42,"body":{"type":"Put","key":"foo","value":"bar"}}"#.into();
+            r#"{"id":42,"request":{"type":"Put","key":"foo","value":"bar"}}"#.into();
         let actual: Vec<u8> = ApiRequestEnvelope {
             id: 42,
-            body: ApiRequest::Put {
+            request: ApiRequest::Put {
                 key: "foo".to_string(),
                 value: "bar".to_string(),
             },

@@ -11,13 +11,16 @@ impl StateMachine {
         StateMachine { store }
     }
 
-    pub async fn apply(&self, entry: LogEntry) {
-        match entry.command {
-            Command::Put { key, value } => self.store.put(&key, &value).await,
+    pub async fn apply(&self, entry: &LogEntry) {
+        match &entry.command {
+            Command::Put { key, value } => {
+                self.store.put(&key, &value).await;
+            }
+            Command::NoOp => {}
         };
     }
 
-    pub async fn apply_many(&self, entries: Vec<LogEntry>) {
+    pub async fn apply_many(&self, entries: &[LogEntry]) {
         for entry in entries {
             self.apply(entry).await;
         }
@@ -58,7 +61,7 @@ mod test_state_machine {
     async fn applies_log_entries_to_a_store() {
         let store = Arc::new(Store::new());
         let state_machine = StateMachine::new(store.clone());
-        let _ = state_machine.apply_many(ENTRIES.clone()).await;
+        let _ = state_machine.apply_many(&*ENTRIES).await;
         assert_eq!(store.get("foo").await, Some("baz".to_string()));
         assert_eq!(store.get("bar").await, Some("qux".to_string()));
     }

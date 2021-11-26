@@ -5,6 +5,7 @@ use std::error::Error;
 #[cfg(not(feature = "std"))]
 use std::fmt::Display;
 
+use crate::rpc::request::AppendEntriesRequest;
 use err_derive::Error;
 
 pub type AsyncError = Box<dyn std::error::Error + Send + Sync>;
@@ -19,7 +20,7 @@ macro_rules! boxed_async_err {
     };
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, PartialEq)]
 pub enum NetworkError {
     #[error(display = "no record of peer at address: {:?}", _0)]
     NoPeerAtAddress(String),
@@ -36,7 +37,7 @@ pub enum NetworkError {
 }
 boxed_async_err!(NetworkError);
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, PartialEq)]
 pub enum ProtocolError {
     #[error(display = "unexpected response type: {:?}", _0)]
     BadResponse(String),
@@ -50,7 +51,9 @@ pub enum ProtocolError {
     #[error(display = "request issued to leader but must be handled by follower")]
     FollowerRequired,
     #[error(display = "failed to replicate command to cluster")]
-    ReplicationFailed,
+    LogReplicationFailure,
+    #[error(display = "AppendEntry failed. Retry with decremented index {}", _0)]
+    RetryAppendEntry(usize),
 }
 boxed_async_err!(ProtocolError);
 
@@ -71,5 +74,7 @@ pub enum PersistenceError {
     LogDeserializationError(String),
     #[error(display = "tried to pop from empty log")]
     RemoveFromEmptyLogError,
+    #[error(display = "could not parse metadata_for_test_node from stored value")]
+    MetadataParseError,
 }
 boxed_async_err!(PersistenceError);

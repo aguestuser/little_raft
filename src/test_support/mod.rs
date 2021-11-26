@@ -1,2 +1,2 @@
-mod connection;
-pub mod gen;
+pub(crate) mod gen;
+mod log;

@@ -1,11 +1,11 @@
 #![allow(dead_code)]
 use crate::api::client::ApiClientConfig;
-use crate::api::request::ApiRequest;
+use crate::api::request::{ApiRequest, ApiRequestEnvelope};
 use crate::api::response::{ApiResponse, ApiResponseEnvelope};
-use crate::rpc_legacy::client::RpcClientConfig;
-use crate::rpc_legacy::request::{LegacyRpcRequest, LegacyRpcRequestEnvelope};
-use crate::rpc_legacy::response::{LegacyRpcResponse, LegacyRpcResponseEnvelope};
-use crate::tcp::ServerConfig;
+use crate::rpc::client::RpcClientConfig;
+use crate::rpc::request::{AppendEntriesRequest, RpcRequest, RpcRequestEnvelope};
+use crate::rpc::response::{AppendEntriesResponse, RpcResponse, RpcResponseEnvelope};
+use crate::state::log::{Command, LogEntry};
 use rand::seq::SliceRandom;
 use rand::Rng;
 use std::net::SocketAddr;
@@ -25,11 +25,11 @@ impl Gen {
 
     pub fn str() -> String {
         let strs = vec![
-            "Twas brillig and the slythy toves did gyre and gimble in the wabe.".to_string(),
-            "A screaming comes across the sky.".to_string(),
-            "It has happened before, but there is nothing to compare it to now.".to_string(),
-            "Stately, plump Buck Mulligan came from the stairhead".to_string(),
-            "bearing a bowl of lather on which a mirror and a razor lay crossed.".to_string(),
+            "foo".to_string(),
+            "bar".to_string(),
+            "baz".to_string(),
+            "bam".to_string(),
+            "qux".to_string(),
         ];
         strs.choose(&mut rand::thread_rng()).unwrap().clone()
     }
@@ -46,25 +46,72 @@ impl Gen {
         SocketAddr::from(([127, 0, 0, 1], port))
     }
 
-    pub fn request_envelope() -> LegacyRpcRequestEnvelope {
-        LegacyRpcRequestEnvelope {
+    pub fn rpc_request_envelope() -> RpcRequestEnvelope {
+        RpcRequestEnvelope {
             id: Gen::u64(),
-            body: Gen::request(),
+            request: Gen::rpc_request(),
         }
     }
 
-    pub fn request() -> LegacyRpcRequest {
-        let requests = vec![LegacyRpcRequest::Put {
+    pub fn rpc_request() -> RpcRequest {
+        let requests = vec![RpcRequest::AppendEntries(AppendEntriesRequest {
+            entries: vec![],
+            leader_address: Gen::socket_addr().to_string(),
+            leader_commit: 0,
+            leader_term: 0,
+            prev_log_index: 0,
+            prev_log_term: 0,
+        })];
+        requests.choose(&mut rand::thread_rng()).unwrap().clone()
+    }
+
+    pub fn log_entries(num_entries: usize) -> Vec<LogEntry> {
+        (0..num_entries).map(Gen::log_entry_with_term).collect()
+    }
+
+    pub fn log_entry_with_term(term: usize) -> LogEntry {
+        LogEntry {
+            term,
+            command: Gen::put_cmd(),
+        }
+    }
+
+    pub fn log_entry() -> LogEntry {
+        LogEntry {
+            term: Gen::usize(),
+            command: Gen::put_cmd(),
+        }
+    }
+
+    pub fn put_cmd() -> Command {
+        Command::Put {
             key: Gen::str(),
             value: Gen::str(),
-        }];
+        }
+    }
+
+    pub fn api_request_envelope() -> ApiRequestEnvelope {
+        ApiRequestEnvelope {
+            id: Gen::u64(),
+            request: Gen::api_request(),
+        }
+    }
+
+    pub fn api_request() -> ApiRequest {
+        let requests = [
+            ApiRequest::Put {
+                key: Gen::str(),
+                value: Gen::str(),
+            },
+            ApiRequest::Get { key: Gen::str() },
+        ];
         requests.choose(&mut rand::thread_rng()).unwrap().clone()
     }
 
     pub fn api_response_envelope() -> ApiResponseEnvelope {
         ApiResponseEnvelope {
             id: Gen::u64(),
-            body: Gen::api_response(),
+            response: Gen::api_response(),
         }
     }
 
@@ -92,34 +139,29 @@ impl Gen {
         }
     }
 
-    pub fn rpc_response_envelope() -> LegacyRpcResponseEnvelope {
-        LegacyRpcResponseEnvelope {
+    pub fn rpc_response_envelope() -> RpcResponseEnvelope {
+        RpcResponseEnvelope {
             id: Gen::u64(),
-            body: Gen::rpc_response(),
+            response: Gen::rpc_response(),
         }
     }
 
-    pub fn rpc_response() -> LegacyRpcResponse {
-        let responses = vec![
-            LegacyRpcResponse::ToPut {
-                was_modified: Gen::bool(),
-            },
-            LegacyRpcResponse::ServerError { msg: Gen::str() },
-        ];
+    pub fn rpc_response() -> RpcResponse {
+        let responses = vec![RpcResponse::ToAppendEntries(AppendEntriesResponse {
+            peer_term: 0,
+            success: true,
+        })];
         responses.choose(&mut rand::thread_rng()).unwrap().clone()
     }
 
-    pub fn rpc_response_to(request: LegacyRpcRequest) -> LegacyRpcResponse {
+    pub fn rpc_response_to(request: RpcRequest) -> RpcResponse {
         match request {
-            LegacyRpcRequest::Put { .. } => LegacyRpcResponse::ToPut {
-                was_modified: Gen::bool(),
-            },
-        }
-    }
-
-    pub fn server_config() -> ServerConfig {
-        ServerConfig {
-            address: Gen::socket_addr(),
+            RpcRequest::AppendEntries { .. } => {
+                RpcResponse::ToAppendEntries(AppendEntriesResponse {
+                    peer_term: 0,
+                    success: true,
+                })
+            }
         }
     }
 

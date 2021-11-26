@@ -11,22 +11,24 @@ As a learning project, it will often take long detours into implementing things 
 
 - [x] 0. write a server that exposes a TCP + JSON interface (with `get` and `put` commands) to a simple key/value store (implemented as a thread-safe hash-map that can store strings as values)
 - [x] 1. write a client for this server
-- [x] 2. implement naive (unsafe) replication
-  - [x] app consists of 5 node cluster w/ 1 leader, 4 followers. followers only have servers, leaders have server and client that can issue commands to all followers.
-  - [x] followers respond to `put` command by writing to local hashmap, sending success message
-  - [x] leaders respond to `put` sommand by issuing `put` command to followers. if majority respond with success, it writes k/v pair to hashmap, issues success to caller
-  - [x] NOTE: this is unsafe (and not very useful in establishing any meaningful kind of consensus). there is no way of enforcing an eventually consistent state between leaders and all followers or recovering from any node crashing. the point is simply to get the basic topolgy of multi-node communication in place!
-- [ ] 3. implement proper log replication (w/ commits to state machine)
-  - [ ] each node keeps an append-only log of `put` commands (implemented as a `Vec<Commmand::Put>` that serializes its elements and appends them to a file before appending them?) and an append-only log of commit indexes (to track which elements of the log have been committed)
-  - [ ] leaders issue `ApendEntry` RPC calls as specified in the Raft Paper (below)
-  - [x] NOTE: we descope leader election at this stage!
-ly want before doing so involves a large migration
-- [ ] 4. migrate protocol to protobuf rpc (using [tonic](https://github.com/hyperium/tonic)).
-  - [x] NOTE: we do this before implementing log replication in 4. b/c that implementation will cause the  surface area & complexity of of the RPC API to expand dramatically and we wish to migrate to our desired framework while it is still relatively small (and so we don't implement this API twice!)
-- [ ] 5. implement heartbeats
+- [x] 2. implement naive (unsafe) replication -- preserved in [legacy-log-replication branch](https://github.com/aguestuser/little_raft/tree/legacy-log-replication) [a]
+  - [x] app consists of cluster w/ 1 leader, 4 followers, all of which read and respond to api calls from external clients and rpc calls from other nodes in the cluster.
+  - [x] all nodes respond to `get` api call by returning value from hashmap
+  - [x] leader responds to `put` api call by issuing `put` rpc call to all followers. if majority respond with success, it writes k/v pair to hashmap, issues success to api caller.
+  - [x] followers respond to `put` api call by redirecting to leader.
+- [ ] 3. implement proper log replication (w/ commits to state machine)[b]
+  - [x] introduce state machine advanced via application of log entries known to be safely replicated across all clients -- as specified in the Raft Paper (below)
+  - [ ] test corner cases!
+- [ ] 4. refactor api client to know about all servers in cluster (issues `Get` to random node, `Put` to ) -- consider
+      migrating api client protocol to http
+- [ ] 5. maybe: migrate rpc protocol to stateless protobuf Rpc over http (using [tonic](https://github.com/hyperium/tonic)) -- else: implement rpc client reconnect on broken tcp connection
 - [ ] 6. implement leader election
 - [ ] 7. implement log compaction
 - [ ] 8. implement cluster expansion/contraction
+
+[a] this implementation is deliberately unsafe in that it does not provide any way of enforcing an eventually consistent state between leaders and followers or recovering from any node crashing. the point is simply to sketch out the network topology and protocol for *attempting* to sync state across may nodes in a cluster.
+
+[b] we deliberately descope leader election at this stage. the point is to get log replication working.
 
 # Resources
 
