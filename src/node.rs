@@ -61,7 +61,7 @@ impl Node {
     }
 
     pub async fn run(&mut self) -> Result<()> {
-        let mut rpc_request_rx = self.rpc_server.run().await?;
+        let rpc_request_rx = self.rpc_server.run().await?;
         let _ = self.rpc_client.run().await?;
 
         Self::handle_api_requests(

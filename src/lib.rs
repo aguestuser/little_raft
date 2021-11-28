@@ -5,7 +5,6 @@ extern crate lazy_static;
 pub mod api;
 pub mod error;
 pub mod node;
-pub mod rpc;
 pub mod rpc_legacy;
 pub mod state;
 pub mod tcp;
